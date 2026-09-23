@@ -482,7 +482,7 @@ final class ModelInstall: ObservableObject {
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    private static func sha256(of url: URL) throws -> String {
+    nonisolated private static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
