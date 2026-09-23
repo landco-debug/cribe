@@ -1,4 +1,4 @@
-name: Build Cribe.app
+name: Build Cribe — GigaAM-GGUF-TranscribeCpp
 
 on:
   workflow_dispatch:
@@ -38,12 +38,12 @@ jobs:
         run: codesign --verify --deep --strict --verbose=2 dist/Cribe.app
 
       - name: Pack app
-        run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-macOS-Apple-Silicon.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip
 
       - name: Upload ready-to-install app
         uses: actions/upload-artifact@v4
         with:
-          name: Cribe-macOS-Apple-Silicon
+          name: Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon
           path: Cribe-macOS-Apple-Silicon.zip
           if-no-files-found: error
           retention-days: 30
