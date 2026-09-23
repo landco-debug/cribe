@@ -327,7 +327,7 @@ final class ModelInstall: ObservableObject {
 
                 setState(.preparing, for: id)
                 let digest = try await Task.detached(priority: .utility) {
-                    try Self.sha256(of: staging)
+                    try modelFileSHA256(staging)
                 }.value
                 guard digest == Self.gigaAMSHA256 else { throw LibraryError.checksumMismatch }
 
@@ -482,16 +482,17 @@ final class ModelInstall: ObservableObject {
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    nonisolated private static func sha256(of url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+}
 
-        var hasher = SHA256()
-        while true {
-            let data = try handle.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
-            if data.isEmpty { break }
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+private func modelFileSHA256(_ url: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+
+    var hasher = SHA256()
+    while true {
+        let data = try handle.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
+        if data.isEmpty { break }
+        hasher.update(data: data)
     }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
 }
