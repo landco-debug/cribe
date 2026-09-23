@@ -51,10 +51,36 @@ final class ModelInstallTests: XCTestCase {
         try Data("not a supported ASR GGUF".utf8).write(to: invalid)
 
         do {
-            _ = try await install.importGGUF(from: invalid)
+            _ = try await install.importModel(from: invalid)
             XCTFail("Невалидный GGUF не должен регистрироваться")
         } catch {
             XCTAssertEqual(install.entries.count, 2)
         }
+    }
+
+    func testInvalidWhisperBINIsNotRegistered() async throws {
+        let install = ModelInstall(settings: AppSettings(defaults: defaults), rootURL: root)
+        let invalid = root.deletingLastPathComponent()
+            .appendingPathComponent("invalid-" + UUID().uuidString + ".bin")
+        defer { try? FileManager.default.removeItem(at: invalid) }
+        try Data("not a legacy whisper.cpp model".utf8).write(to: invalid)
+
+        do {
+            _ = try await install.importModel(from: invalid)
+            XCTFail("Невалидный .bin не должен регистрироваться")
+        } catch {
+            XCTAssertEqual(install.entries.count, 2)
+        }
+    }
+
+    func testAnyReadyModelCountsForOnboarding() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let giga = root.appendingPathComponent("gigaam-v3-e2e-rnnt-Q8_0.gguf")
+        try Data("fixture".utf8).write(to: giga)
+
+        let install = ModelInstall(settings: AppSettings(defaults: defaults), rootURL: root)
+
+        XCTAssertTrue(install.hasAnyReadyModel)
+        XCTAssertEqual(install.state(for: ASRModelID.gigaAME2ERNNTQ8), .ready)
     }
 }
