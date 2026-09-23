@@ -133,7 +133,7 @@ final class AppCore: ObservableObject {
         guard models.activeModelIsInstalled else { return }
         let engine = models.activeEngine()
         let language = settings.language
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) {
             try? await engine.prepare(language: language) { _ in }
         }
     }
