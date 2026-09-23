@@ -167,7 +167,7 @@ private struct GeneralPane: View {
                 case .rightCommand:
                     if settings.dictationKeyBehavior == .hold {
                         caption(
-                            "Удерживайте правый ⌘ — запись идёт до отпускания; после отпускания "
+                            "Удерживайте правый ⌘ около 0,6 с — после защитной паузы начинается запись до отпускания; затем "
                                 + "начинается распознавание. Правый ⌥ — то же с переводом на "
                                 + "\(settings.translationTarget.afterOn). Esc во время удержания отменяет запись."
                                 + (accessibilityGranted ? "" : " Нужно разрешение Accessibility.")
@@ -184,7 +184,7 @@ private struct GeneralPane: View {
                 case .leftCommand:
                     if settings.dictationKeyBehavior == .hold {
                         caption(
-                            "Удерживайте левый ⌘ — запись идёт до отпускания; после отпускания "
+                            "Удерживайте левый ⌘ около 0,6 с — после защитной паузы начинается запись до отпускания; затем "
                                 + "начинается распознавание. Левый ⌥ — то же с переводом на "
                                 + "\(settings.translationTarget.afterOn). Esc во время удержания отменяет запись."
                                 + (accessibilityGranted ? "" : " Нужно разрешение Accessibility.")
