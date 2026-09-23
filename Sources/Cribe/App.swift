@@ -41,9 +41,8 @@ final class AppCore: ObservableObject {
     /// закрытое крестиком, возвращалось бы на каждом старте.
     @Published private(set) var needsOnboarding: Bool
 
-    /// Модели распознавания на диске нет, а онбординг человек уже проходил — значит, это
-    /// обновление, сменившее движок. Экран загрузки показываем на каждом запуске, пока
-    /// модель не приедет: без неё диктовка не работает вовсе, и молчать об этом нельзя.
+    /// Выбранной модели распознавания на диске нет, а онбординг уже проходили.
+    /// Открываем Общие настройки с выбором моделей; скачивание всегда требует явного нажатия.
     @Published private(set) var needsModelUpdate: Bool
 
     /// Зачем открыли редактор словаря из меню. Редактор разворачивает нужный блок
@@ -495,6 +494,7 @@ private struct MenuBarScene: Scene {
     @ObservedObject var controller: DictationController
 
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Scene {
         MenuBarExtra {
@@ -519,15 +519,13 @@ private struct MenuBarScene: Scene {
                 openWindow(id: WindowID.history)
             }
         }
-        // Обновление сменило движок распознавания, и новую модель надо скачать. Окно
-        // открывается тем же путём, что и онбординг, и по тем же причинам: сцены к первому
-        // тику ещё только собираются, а всплыть позади чужих окон оно не должно.
+        // Выбранной локальной модели нет. Ничего не скачиваем за пользователя:
+        // открываем обычные настройки, где рядом видны Parakeet, GigaAM и импорт.
         .onChange(of: core.needsModelUpdate, initial: true) { _, needs in
             guard needs else { return }
             Task { @MainActor in
-                WindowPresenter.shared.present(WindowID.modelUpdate) {
-                    openWindow(id: WindowID.modelUpdate)
-                }
+                openSettings()
+                core.markModelUpdateShown()
             }
         }
         .onChange(of: core.needsOnboarding, initial: true) { _, needs in
