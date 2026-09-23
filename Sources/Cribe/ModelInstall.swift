@@ -313,7 +313,7 @@ final class ModelInstall: ObservableObject {
         setState(.downloading(0), for: id)
         tasks[id] = Task { [weak self] in
             guard let self else { return }
-            let staging = rootURL.appendingPathComponent(".gigaam-download-(UUID().uuidString).gguf")
+            let staging = rootURL.appendingPathComponent(".gigaam-download-" + UUID().uuidString + ".gguf")
             defer { try? FileManager.default.removeItem(at: staging) }
 
             do {
@@ -352,9 +352,9 @@ final class ModelInstall: ObservableObject {
         try FileManager.default.createDirectory(at: importedURL, withIntermediateDirectories: true)
 
         let token = UUID().uuidString.lowercased()
-        let id = "gguf-(token)"
-        let filename = "(token).gguf"
-        let staging = rootURL.appendingPathComponent(".import-(token).gguf")
+        let id = "gguf-" + token
+        let filename = token + ".gguf"
+        let staging = rootURL.appendingPathComponent(".import-" + token + ".gguf")
         let destination = importedURL.appendingPathComponent(filename)
         try? FileManager.default.removeItem(at: staging)
         try FileManager.default.copyItem(at: source, to: staging)
