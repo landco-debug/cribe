@@ -16,6 +16,8 @@ cd "$(dirname "$0")/.."
 source "scripts/entitlements.sh"
 # shellcheck source=sparkle.sh
 source "scripts/sparkle.sh"
+# shellcheck source=transcribe-runtime.sh
+source "scripts/transcribe-runtime.sh"
 # Локальная личность: файл .signing-identity (в git не попадает) избавляет от запросов
 # связки ключей — при ad-hoc подписи каждая пересборка выглядит для macOS новой программой.
 if [ -z "${SIGN_IDENTITY:-}" ] && [ -f .signing-identity ]; then
@@ -36,11 +38,20 @@ cp Resources/CrabMark.png "$APP/Contents/Resources/"
 cp Resources/CrabGlyph.pdf Resources/CrabGlyphRecording.pdf "$APP/Contents/Resources/"
 cp Info.plist "$APP/Contents/Info.plist"
 embed_sparkle "$APP"
+embed_transcribe "$APP"
+
+# CTranscribe — вложенный runtime code. Подписываем ДО внешнего .app.
+TIMESTAMP_FLAG="--timestamp"
+[ "$SIGN_IDENTITY" = "-" ] && TIMESTAMP_FLAG="--timestamp=none"
+sign_transcribe "$APP" "$SIGN_IDENTITY" "$TIMESTAMP_FLAG"
+
 ENTITLEMENTS=$(prepare_entitlements Dev.entitlements "$APP" "$SIGN_IDENTITY")
 codesign --force --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"
 # --deep: внутри бандла теперь живёт Sparkle со своей вложенной программой, и проверять
 # надо её тоже — иначе ошибка вложенной подписи всплыла бы только на нотаризации.
 codesign --verify --deep --strict --verbose=2 "$APP"
+# Проверяем именно готовый bundle, а не build products.
+bash scripts/verify-app-runtime.sh "$APP"
 if [ "$SIGN_IDENTITY" = "-" ]; then
   echo "Подпись: ad-hoc (SIGN_IDENTITY не задан)"
 else

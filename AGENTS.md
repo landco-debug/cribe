@@ -878,6 +878,30 @@ Real-model GigaAM gate:
 Итого: интеграция transcribe.cpp + GigaAM + universal GGUF находится в рабочем `main`,
 а реальный GigaAM Q8_0 smoke и финальная .app-сборка подтверждены GitHub Actions.
 
+#### Packaging regression: missing CTranscribe.framework (исправлено)
+
+Первая пользовательская сборка этого подпроекта прошла `swift build`, unit tests,
+real-model GigaAM smoke и `codesign --verify --deep --strict`, но не запускалась после
+установки. Причина была в ручной упаковке `dist/Cribe.app`:
+
+- Mach-O `Contents/MacOS/Cribe` ссылался на
+  `@rpath/CTranscribe.framework/Versions/Current/CTranscribe`;
+- SwiftPM `binaryTarget` давал framework линкеру/тестам из build artifact directory;
+- `scripts/build-app.sh` копировал Sparkle, но не новый `CTranscribe.framework`;
+- `codesign --verify` проверяет подпись существующих объектов, но не доказывает полноту
+  dyld runtime dependencies.
+
+После инцидента обязательны:
+
+- `scripts/transcribe-runtime.sh` — embed + подпись `CTranscribe.framework`;
+- `scripts/release.sh` — переподпись CTranscribe тем же Developer ID;
+- `scripts/verify-app-runtime.sh` — проверка `otool -L` именно готового
+  `dist/Cribe.app` и физического наличия локальных framework;
+- build workflow — реальный launch-smoke готового app; ранний выход процесса = failure;
+- build workflow запускается и на pull request, чтобы packaging regression ловился ДО merge.
+
+Главный урок: `swift build`/тесты/подпись не заменяют проверку пользовательского app bundle.
+
 ### 2026-09-23 — Hold menu-tracking stuck-recording fix
 
 После реального теста найден отдельный класс бага: Option меняет alternate items в

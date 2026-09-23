@@ -14,6 +14,17 @@ on:
       - 'Package.swift'
       - 'Package.resolved'
       - '.github/workflows/build-app.yml'
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Resources/**'
+      - 'scripts/**'
+      - 'Info.plist'
+      - 'Dev.entitlements'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/build-app.yml'
 
 concurrency:
   group: build-app-${{ github.ref }}
@@ -36,6 +47,12 @@ jobs:
 
       - name: Verify app signature
         run: codesign --verify --deep --strict --verbose=2 dist/Cribe.app
+
+      - name: Verify packaged runtime dependencies
+        run: bash scripts/verify-app-runtime.sh dist/Cribe.app
+
+      - name: Launch smoke-test packaged app
+        run: bash scripts/verify-app-runtime.sh dist/Cribe.app --launch
 
       - name: Pack app
         run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip
