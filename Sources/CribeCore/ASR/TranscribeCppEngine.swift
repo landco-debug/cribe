@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OSLog
 import TranscribeCpp
@@ -46,6 +47,18 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
         category: "TranscribeCpp"
     )
 
+    /// ggml из transcribe.cpp v0.2.3 на macOS 15+ может abort() при штатном выходе,
+    /// если Metal residency sets включены: device destructor видит незакрытые rsets.
+    /// В самом vendored ggml предусмотрен этот официальный escape hatch. Он отключает
+    /// только residency-set keep-alive, а НЕ Metal backend/GPU.
+    private static let configureGGMLMetalOnce: Void = {
+        setenv("GGML_METAL_NO_RESIDENCY", "1", 1)
+    }()
+
+    private static func configureRuntime() {
+        _ = configureGGMLMetalOnce
+    }
+
     private let modelURL: URL
     private let lock = NSLock()
     private var model: Model?
@@ -60,6 +73,7 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
     /// Загружаем модель тем же runtime, которым потом будем распознавать. Поэтому файл с
     /// корректным расширением, но неизвестной ASR-архитектурой, не сможет попасть в реестр.
     public static func inspectModel(at url: URL) throws -> ModelInfo {
+        configureRuntime()
         let model = try Model(path: url.path, options: ModelOptions(backend: .cpu))
         let capabilities = model.capabilities
         if capabilities.nativeSampleRate != 0, capabilities.nativeSampleRate != 16_000 {
@@ -99,10 +113,11 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
     ) async throws -> String {
         let model = try await ready()
         let session = try model.session()
-        let options = RunOptions(
+        let options = runOptions(
+            model: model,
             task: .transcribe,
-            timestamps: .none,
-            language: language.rawValue
+            language: language,
+            prompt: prompt
         )
         let result = try await session.run(samples, options: options)
         return result.text
@@ -123,14 +138,52 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
             throw TranscriptionEngineError.translationUnsupported
         }
         let session = try model.session()
-        let options = RunOptions(
+        let options = runOptions(
+            model: model,
             task: .translate,
-            timestamps: .none,
-            language: language.rawValue,
+            language: language,
+            prompt: prompt,
             targetLanguage: "en"
         )
         let result = try await session.run(samples, options: options)
         return result.text
+    }
+
+
+    /// Семантика запуска зависит от семейства.
+    ///
+    /// Для Whisper НЕ отключаем timestamps: AUTO у transcribe.cpp выбирает segment path,
+    /// на котором реализованы long-form chunking/temperature fallback. Прежнее .none
+    /// насильно уводило Whisper на упрощённый decode path.
+    ///
+    /// Если runtime сообщает, что это Whisper, передаём также словарный prompt и включаем
+    /// previous-token context между 30-секундными чанками. Для GigaAM и остальных семейств
+    /// family=nil, AUTO разрешается самим runtime в поддерживаемую гранулярность (обычно NONE).
+    private func runOptions(
+        model: Model,
+        task: TranscriptionTask,
+        language: Language,
+        prompt: String,
+        targetLanguage: String? = nil
+    ) -> RunOptions {
+        var family: RunExtension?
+        let whisperProbe = RunExtension.whisper(WhisperRunOptions())
+        if model.accepts(whisperProbe) {
+            family = .whisper(
+                WhisperRunOptions(
+                    initialPrompt: prompt.isEmpty ? nil : prompt,
+                    conditionOnPrevTokens: true
+                )
+            )
+        }
+
+        return RunOptions(
+            task: task,
+            timestamps: .auto,
+            language: language.rawValue,
+            targetLanguage: targetLanguage,
+            family: family
+        )
     }
 
     private func ready() async throws -> Model {
@@ -140,7 +193,8 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
             if let loading { return loading }
             let url = modelURL
             let started = Task.detached(priority: .userInitiated) {
-                try Model(path: url.path, options: ModelOptions(backend: .auto))
+                Self.configureRuntime()
+                return try Model(path: url.path, options: ModelOptions(backend: .auto))
             }
             loading = started
             return started
@@ -153,7 +207,9 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
                 loading = nil
             }
             Self.logger.notice(
-                "GGUF готов: \(loaded.arch, privacy: .public) / \(loaded.variant, privacy: .public), backend=\(loaded.backend, privacy: .public)"
+                "ASR-модель готова: \(self.modelURL.lastPathComponent, privacy: .public), "
+                    + "\(loaded.arch, privacy: .public) / \(loaded.variant, privacy: .public), "
+                    + "backend=\(loaded.backend, privacy: .public)"
             )
             return loaded
         } catch {

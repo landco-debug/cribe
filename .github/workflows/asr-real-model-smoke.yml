@@ -46,7 +46,7 @@ jobs:
             -o "$RUNNER_TEMP/ru.wav" \
             "https://raw.githubusercontent.com/handy-computer/transcribe.cpp/v0.2.3/samples/ru.wav"
 
-      - name: Run real GigaAM inference
+      - name: Run real GigaAM inference + process-exit teardown
         env:
           TRANSCRIBE_GIGAAM_GGUF: ${{ runner.temp }}/gigaam-v3-e2e-rnnt-Q8_0.gguf
           TRANSCRIBE_GIGAAM_WAV: ${{ runner.temp }}/ru.wav
@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           curl -L --fail --retry 3             -o "$RUNNER_TEMP/jfk.wav"             "https://raw.githubusercontent.com/handy-computer/transcribe.cpp/v0.2.3/samples/jfk.wav"
 
-      - name: Run real Whisper BIN inference
+      - name: Run real Whisper BIN inference + process-exit teardown
         env:
           TRANSCRIBE_WHISPER_BIN: ${{ runner.temp }}/ggml-tiny-q8_0.bin
           TRANSCRIBE_WHISPER_BIN_WAV: ${{ runner.temp }}/jfk.wav

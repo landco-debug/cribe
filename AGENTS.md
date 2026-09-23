@@ -922,6 +922,39 @@ Real-model GigaAM gate:
 - финальный Artifact: `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon`,
   id `10777763491`.
 
+#### 2026-09-24 — второй пользовательский прогон: legacy-cache, Whisper decode, Metal exit
+
+После реального теста импортированного Whisper BIN обнаружены ещё три проблемы.
+
+1. **LegacyWhisperCache больше не считает/не удаляет текущие модели.**
+   Старый код исторически считал весь `Application Support/Cribe/models` Whisper-мусором.
+   После появления нового ModelInstall это стало опасно: строка «Старые модели Whisper»
+   включала активный `imported/*.bin` + GigaAM и могла удалить весь каталог.
+   Теперь legacy-cleanup работает только по незарезервированным top-level legacy-кандидатам;
+   `imported/`, `registry.json`, GigaAM, staging и любые top-level `.gguf/.bin` защищены.
+
+2. **Whisper использует production decode path transcribe.cpp.**
+   `TranscribeCppEngine` больше не форсирует `timestamps: .none`. Используется `.auto`:
+   для Whisper это segment/long-form path, для GigaAM runtime сам разрешает AUTO в NONE.
+   Для Whisper дополнительно передаётся словарный initial prompt и включён
+   `conditionOnPrevTokens` между чанками. Это не добавляет beam search: в закреплённом
+   transcribe.cpp v0.2.3 его нет, поэтому модели, чья эталонная recipe требует beam_size=5,
+   могут всё ещё отличаться по качеству от Transformers/faster-whisper.
+
+3. **SIGABRT при обычном «Выход» закрыт workaround-ом самого ggml.**
+   Crash-report пользователя: `NSApplication terminate → exit → ggml_metal_rsets_free →
+   ggml_abort`. В vendored ggml v0.2.3 residency sets можно отключить через
+   `GGML_METAL_NO_RESIDENCY=1`. Cribe выставляет переменную ДО первой Model load.
+   Metal/GPU остаётся включён; отключается только residency-set keep-alive, вызывавший
+   teardown assertion на macOS 15+.
+
+Регрессия legacy-cleanup покрыта `LegacyWhisperCacheTests`. Real-model workflow после
+реального GigaAM/Whisper inference завершается естественным exit, поэтому exit-time abort
+также является failure acceptance gate.
+
+Говорящий stem исправленной сборки:
+`Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit-macOS-Apple-Silicon.zip`.
+
 #### Packaging regression: missing CTranscribe.framework (исправлено)
 
 Первая пользовательская сборка этого подпроекта прошла `swift build`, unit tests,

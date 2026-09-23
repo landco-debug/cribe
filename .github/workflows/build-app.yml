@@ -55,12 +55,12 @@ jobs:
         run: bash scripts/verify-app-runtime.sh dist/Cribe.app --launch
 
       - name: Pack app
-        run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit-macOS-Apple-Silicon.zip
 
       - name: Upload ready-to-install app
         uses: actions/upload-artifact@v4
         with:
-          name: Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon
-          path: Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip
+          name: Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit-macOS-Apple-Silicon
+          path: Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit-macOS-Apple-Silicon.zip
           if-no-files-found: error
           retention-days: 30
