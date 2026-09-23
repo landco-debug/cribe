@@ -48,6 +48,7 @@ public final class AppSettings: ObservableObject {
 
     private enum Key {
         static let language = "language"
+        static let activeASRModelID = "activeASRModelID"
         static let gptEnabled = "gptEnabled"
         static let gptMode = "gptMode"
         static let inputDeviceUID = "inputDeviceUID"
@@ -76,6 +77,14 @@ public final class AppSettings: ObservableObject {
 
     @Published public var language: Language {
         didSet { defaults.set(language.rawValue, forKey: Key.language) }
+    }
+
+    /// Какая локальная ASR-модель будет закреплена за следующей диктовкой.
+    ///
+    /// Значение — стабильный ID реестра, а не путь к файлу: импортированный GGUF может
+    /// переезжать внутри Application Support без сброса пользовательского выбора.
+    @Published public var activeASRModelID: String {
+        didSet { defaults.set(activeASRModelID, forKey: Key.activeASRModelID) }
     }
 
     @Published public var gptEnabled: Bool {
@@ -230,6 +239,7 @@ public final class AppSettings: ObservableObject {
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         language = defaults.string(forKey: Key.language).flatMap(Language.init(rawValue:)) ?? .ru
+        activeASRModelID = defaults.string(forKey: Key.activeASRModelID) ?? ASRModelID.parakeet
         gptEnabled = defaults.object(forKey: Key.gptEnabled) as? Bool ?? true
         gptMode = defaults.string(forKey: Key.gptMode).flatMap(GPTAuthMode.init(rawValue:)) ?? .codex
         translateToEnglish = defaults.bool(forKey: Key.translateToEnglish)
