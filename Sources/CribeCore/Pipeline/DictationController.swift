@@ -372,6 +372,9 @@ public final class DictationController: ObservableObject {
 
     private var chunks: AsyncStream<[Float]>.Continuation?
     private var vadTask: Task<Void, Never>?
+    /// Абсолютный потолок живой записи. Отдельная задача, потому что от VAD он не зависит:
+    /// даже если речь/тишина не распознаны, забытая запись всё равно штатно завершится.
+    private var recordingLimitTask: Task<Void, Never>?
     /// Петля бегущей строки: живёт ровно столько же, сколько запись.
     private var livePreviewTask: Task<Void, Never>?
     /// Склейка проходов бегущей строки в одну растущую строку. Живёт ровно одну запись.
@@ -623,6 +626,7 @@ public final class DictationController: ObservableObject {
         // столько, сколько она: их снимает её стоп, а не старт следующей.
         vadTask?.cancel()
         vadTask = nil
+        cancelRecordingLimit()
         chunks?.finish()
         chunks = nil
 
@@ -638,7 +642,10 @@ public final class DictationController: ObservableObject {
             cancelSession()
             return
         }
-        await vad.resetStream()
+        // Порог тишины снимаем один раз на сессию. Изменение настройки посреди записи
+        // относится уже к следующей диктовке, а не перестраивает VAD на полуслове.
+        let silenceDuration = settings.autoStopSilenceSeconds
+        await vad.resetStream(silenceDuration: silenceDuration)
 
         let stream = AsyncStream<[Float]> { continuation in chunks = continuation }
         recorder.onLevel = { [weak self] value in
@@ -669,6 +676,7 @@ public final class DictationController: ObservableObject {
         }
 
         startVadLoop(stream: stream, vad: vad)
+        startRecordingLimit(for: session)
         startLivePreview(language: session.language)
         offerParallelHintIfDue()
     }
@@ -814,7 +822,7 @@ public final class DictationController: ObservableObject {
         return false
     }
 
-    /// 2 с тишины после речи → автостоп, если он включён в настройках.
+    /// Настроенная пауза тишины после речи → автостоп, если он включён в настройках.
     private func startVadLoop(stream: AsyncStream<[Float]>, vad: SpeechGating) {
         vadTask = Task { [weak self] in
             for await chunk in stream {
@@ -834,6 +842,42 @@ public final class DictationController: ObservableObject {
         stopAndProcess()
     }
 
+    /// Независимый от VAD предохранитель. Срок снимается после фактического старта
+    /// микрофона, а не после нажатия хоткея: прогрев модели не должен съедать лимит.
+    /// Задача привязана к объекту сессии — просроченный таймер предыдущей диктовки
+    /// принципиально не способен остановить следующую.
+    private func startRecordingLimit(for session: DictationSession) {
+        cancelRecordingLimit()
+        guard settings.recordingLimitEnabled else { return }
+
+        // UI ограничивает диапазон 15...600 с. Нижняя страховка здесь нужна для
+        // повреждённых/старых UserDefaults и одновременно позволяет быстрые unit-тесты.
+        let seconds = min(3_600.0, max(0.05, settings.recordingLimitSeconds))
+        let nanoseconds = UInt64(seconds * 1_000_000_000)
+
+        recordingLimitTask = Task { @MainActor [weak self, weak session] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  let session,
+                  self.recording === session,
+                  self.isRecording
+            else { return }
+
+            self.recordingLimitTask = nil
+            self.stopAndProcess()
+        }
+    }
+
+    private func cancelRecordingLimit() {
+        recordingLimitTask?.cancel()
+        recordingLimitTask = nil
+    }
+
     /// Захват сорвался на живой записи: микрофон не отдал ни одного блока, устройство
     /// исчезло, сессию прервали. Записанное до сбоя не выбрасываем — если там есть что
     /// распознавать, идём обычным стопом; если нет, честно говорим о микрофоне вместо
@@ -851,6 +895,7 @@ public final class DictationController: ObservableObject {
         chunks = nil
         vadTask?.cancel()
         vadTask = nil
+        cancelRecordingLimit()
         livePreviewTask?.cancel()
         livePreviewTask = nil
         session.cancelled = true
@@ -872,6 +917,7 @@ public final class DictationController: ObservableObject {
         chunks = nil
         vadTask?.cancel()
         vadTask = nil
+        cancelRecordingLimit()
         livePreviewTask?.cancel()
         livePreviewTask = nil
         // Отмена не прерывает идущий проход (он живёт своей задачей в `EngineGate`),
@@ -908,6 +954,7 @@ public final class DictationController: ObservableObject {
         chunks = nil
         vadTask?.cancel()
         vadTask = nil
+        cancelRecordingLimit()
         livePreviewTask?.cancel()
         livePreviewTask = nil
         // Идущий фоновый проход не прерывается: `EngineGate` отмену не смотрит, а WhisperKit
