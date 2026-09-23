@@ -398,6 +398,20 @@ final class ModifierKeyTap {
     }
 
     private func finishHold() {
+        // Даже если release callback пришёл раньше задержанного menu-click callback,
+        // WindowServer counters уже отражают click. Поэтому перед finish ещё раз сверяем
+        // снимок и даём системному аккорду приоритет над транскрибацией.
+        if let baseline = holdInputBaseline,
+           reconciliation(since: baseline) == .cancel
+        {
+            cancelPendingHoldStart()
+            stopHoldWatch()
+            holdInputBaseline = nil
+            holdDetector.reset()
+            fire(.holdCancelled)
+            return
+        }
+
         cancelPendingHoldStart()
         stopHoldWatch()
         holdInputBaseline = nil
