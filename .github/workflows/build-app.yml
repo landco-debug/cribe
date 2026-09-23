@@ -1,4 +1,4 @@
-name: Build Cribe — ASR-Models-GGUF-BIN-TranscribeCpp
+name: Build Cribe — ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    name: Cribe — ASR-Models-GGUF-BIN-TranscribeCpp (Apple Silicon)
+    name: Cribe — ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit (Apple Silicon)
     runs-on: macos-26
 
     steps:
