@@ -380,8 +380,13 @@ final class ModelInstall: ObservableObject {
         let filename = token + "." + sourceExtension
         let staging = rootURL.appendingPathComponent(".import-" + token + "." + sourceExtension)
         let destination = importedURL.appendingPathComponent(filename)
-        try? FileManager.default.removeItem(at: staging)
-        try FileManager.default.copyItem(at: source, to: staging)
+
+        // BIN может весить гигабайты. Копирование пользовательского файла не должно
+        // блокировать MainActor и замораживать окно настроек.
+        try await Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: staging)
+            try FileManager.default.copyItem(at: source, to: staging)
+        }.value
 
         do {
             let info = try await Task.detached(priority: .userInitiated) {
