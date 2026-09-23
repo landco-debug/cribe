@@ -93,6 +93,7 @@ final class AppCore: ObservableObject {
     private var leftOptionTap: ModifierKeyTap?
     private var escTap: KeyDownTap?
     private var hotkeyModeSubscription: AnyCancellable?
+    private var hotkeyBehaviorSubscription: AnyCancellable?
     private var escTapSubscription: AnyCancellable?
     /// Об отсутствии разрешения пишем один раз на серию попыток, а не на каждую активацию.
     private var loggedEscFailure = false
@@ -201,36 +202,72 @@ final class AppCore: ObservableObject {
             controller.toggle(translating: true)
         }
 
-        // Каждый тап знает device-бит соседа: аккорд «⌘ удержан + тап ⌥» (и наоборот)
-        // диктовку не запускает — это две хоткей-клавиши друг с другом, а не тап.
+        // Каждый тап остаётся тем же listen-only CGEventTap, что в upstream. В режиме
+        // «Нажатие» он ловит чистый tap, в режиме «Удержание» — push-to-talk с защитным
+        // окном от обычных Cmd/Option-аккордов. Системные события никогда не съедаются.
         rightCommandTap = ModifierKeyTap(
-            blockingFlags: ModifierTapDetector.rightOptionFlag
-        ) { [controller] in controller.toggle() }
-        // Правый ⌥ — та же диктовка, но переводящая: решение принимается на старте сессии,
-        // а остановить запись вправе любая из двух клавиш.
+            blockingFlags: ModifierTapDetector.rightOptionFlag,
+            behavior: settings.dictationKeyBehavior
+        ) { [controller] gesture in
+            switch gesture {
+            case .tap: controller.toggle()
+            case .holdBegan: controller.startDictation()
+            case .holdEnded: controller.finishDictation()
+            case .holdCancelled: controller.cancelDictation()
+            }
+        }
         rightOptionTap = ModifierKeyTap(
             keyCode: ModifierTapDetector.rightOptionKeyCode,
             deviceFlag: ModifierTapDetector.rightOptionFlag,
-            blockingFlags: ModifierTapDetector.rightCommandFlag
-        ) { [controller] in controller.toggle(translating: true) }
+            blockingFlags: ModifierTapDetector.rightCommandFlag,
+            behavior: settings.dictationKeyBehavior
+        ) { [controller] gesture in
+            switch gesture {
+            case .tap: controller.toggle(translating: true)
+            case .holdBegan: controller.startDictation(translating: true)
+            case .holdEnded: controller.finishDictation()
+            case .holdCancelled: controller.cancelDictation()
+            }
+        }
 
-        // Левая пара устроена буквально так же. Отдельные device-биты не дают левому ⌘/⌥
-        // спутаться с правыми, а общий детектор по-прежнему отменяет тап при любом аккорде.
+        // Левая пара использует ровно тот же механизм и те же правила совместимости.
         leftCommandTap = ModifierKeyTap(
             keyCode: ModifierTapDetector.leftCommandKeyCode,
             deviceFlag: ModifierTapDetector.leftCommandFlag,
-            blockingFlags: ModifierTapDetector.leftOptionFlag
-        ) { [controller] in controller.toggle() }
+            blockingFlags: ModifierTapDetector.leftOptionFlag,
+            behavior: settings.dictationKeyBehavior
+        ) { [controller] gesture in
+            switch gesture {
+            case .tap: controller.toggle()
+            case .holdBegan: controller.startDictation()
+            case .holdEnded: controller.finishDictation()
+            case .holdCancelled: controller.cancelDictation()
+            }
+        }
         leftOptionTap = ModifierKeyTap(
             keyCode: ModifierTapDetector.leftOptionKeyCode,
             deviceFlag: ModifierTapDetector.leftOptionFlag,
-            blockingFlags: ModifierTapDetector.leftCommandFlag
-        ) { [controller] in controller.toggle(translating: true) }
-        // `@Published` отдаёт текущее значение при подписке — режим применится и на старте.
+            blockingFlags: ModifierTapDetector.leftCommandFlag,
+            behavior: settings.dictationKeyBehavior
+        ) { [controller] gesture in
+            switch gesture {
+            case .tap: controller.toggle(translating: true)
+            case .holdBegan: controller.startDictation(translating: true)
+            case .holdEnded: controller.finishDictation()
+            case .holdCancelled: controller.cancelDictation()
+            }
+        }
+
+        // @Published отдаёт текущее значение при подписке — сторона применится и на старте.
         hotkeyModeSubscription = settings.$dictationHotkeyMode
             .receive(on: DispatchQueue.main)
             .sink { [weak self] mode in
                 MainActor.assumeIsolated { self?.applyHotkeyMode(mode) }
+            }
+        hotkeyBehaviorSubscription = settings.$dictationKeyBehavior
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] behavior in
+                MainActor.assumeIsolated { self?.applyHotkeyBehavior(behavior) }
             }
 
         // Esc отменяет диктовку — это выход из идущей сессии, а не второй способ её запустить,
@@ -280,7 +317,15 @@ final class AppCore: ObservableObject {
     /// Повторная попытка после выдачи Accessibility: разрешение дают в System Settings уже
     /// после старта, а `start()` идемпотентна — на работающем тапе вызов ничего не делает.
     func retryHotkeyTapIfNeeded() {
+        applyHotkeyBehavior(settings.dictationKeyBehavior)
         applyHotkeyMode(settings.dictationHotkeyMode)
+    }
+
+    private func applyHotkeyBehavior(_ behavior: DictationKeyBehavior) {
+        rightCommandTap?.setBehavior(behavior)
+        rightOptionTap?.setBehavior(behavior)
+        leftCommandTap?.setBehavior(behavior)
+        leftOptionTap?.setBehavior(behavior)
     }
 
     private func applyHotkeyMode(_ mode: HotkeyMode) {
