@@ -2,10 +2,11 @@ import CoreGraphics
 import Foundation
 import CribeCore
 
-/// Слушает «голый» модификатор (по умолчанию правый ⌘) через CGEventTap и зовёт `onTap`,
-/// когда клавишу нажали и отпустили вхолостую. Решение о тапе принимает `ModifierTapDetector`.
+/// Слушает «голый» модификатор (по умолчанию правый ⌘) через CGEventTap.
 ///
-/// Тап только слушающий (`.listenOnly`): чужие ⌘-аккорды проходят нетронутыми.
+/// В режиме toggle чистый короткий tap распознаёт `ModifierTapDetector`; в режиме hold
+/// `ModifierHoldDetector` даёт push-to-talk с защитным окном от обычных системных аккордов.
+/// Event tap только слушающий (`.listenOnly`): чужие ⌘/⌥-события проходят нетронутыми.
 /// Нужен Accessibility — тот же, что и для вставки текста.
 enum ModifierKeyGesture: Sendable {
     case tap
