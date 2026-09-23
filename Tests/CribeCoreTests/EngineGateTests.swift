@@ -30,11 +30,11 @@ final class EngineGateTests: XCTestCase {
     /// пересекаться, даже если вызовы пришли одновременно (актор сам по себе реентерабелен).
     func testConcurrentCallsAreSerialized() async {
         let probe = ConcurrencyProbe()
-        let gate = EngineGate(probe)
+        let gate = EngineGate()
 
         let results = await withTaskGroup(of: String?.self) { group in
             for index in 0..<5 {
-                group.addTask { try? await gate.transcribe([], language: .ru, prompt: "\(index)") }
+                group.addTask { try? await gate.transcribe(probe, [], language: .ru, prompt: "\(index)") }
             }
             var collected: Set<String> = []
             for await value in group {

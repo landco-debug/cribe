@@ -14,11 +14,30 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.5"),
     ],
     targets: [
+        .binaryTarget(
+            name: "CTranscribe",
+            url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.2.3/TranscribeCpp.xcframework.zip",
+            checksum: "944be4d5232f39c99608f676a2ddda2516e0ed3c9fb6db50685ffa8d20a8b9c9"
+        ),
+        .target(
+            name: "TranscribeCpp",
+            dependencies: ["CTranscribe"],
+            path: "Vendor/TranscribeCpp/Sources/TranscribeCpp",
+            linkerSettings: [
+                .linkedLibrary("c++"),
+                .linkedLibrary("z"),
+                .linkedFramework("Accelerate"),
+                .linkedFramework("Foundation"),
+                .linkedFramework("Metal"),
+                .linkedFramework("MetalKit"),
+            ]
+        ),
         .target(
             name: "CribeCore",
             dependencies: [
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                "TranscribeCpp",
             ]
         ),
         .executableTarget(
@@ -41,7 +60,7 @@ let package = Package(
         // (вытеснение, освобождение окна) проверяется только здесь.
         .testTarget(
             name: "CribeAppTests",
-            dependencies: ["Cribe"]
+            dependencies: ["Cribe", "CribeCore"]
         ),
     ]
 )

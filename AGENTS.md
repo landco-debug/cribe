@@ -636,6 +636,177 @@ GitHub Actions:
 Пользователь установил итоговую сборку и подтвердил:
 **«Вроде бы всё работает как надо»**.
 
+### 2026-09-23 — Несколько ASR-моделей: transcribe.cpp + GigaAM + импорт GGUF
+
+Подпроект добавлен поверх `main`
+`ba1e8e57d5deeea893eb04fd0a2d610033111e12` и не переписывает hold-to-dictate,
+WindowServer watchdog или настраиваемые таймеры записи.
+
+#### Что видит пользователь
+
+В «Настройки → Общие → Модель распознавания» теперь живёт единый список:
+
+- **Parakeet TDT v3** — прежний FluidAudio backend, остаётся default для существующих
+  и новых установок;
+- **GigaAM v3 E2E-RNN-T Q8_0** — штатная русская GGUF-модель;
+- импортированные пользователем совместимые `.gguf`;
+- кнопка **«Добавить GGUF…»**.
+
+Для каждой модели UI показывает состояние, позволяет скачать/выбрать, а для GigaAM и
+импортированных моделей — удалить. Выбор активной модели сохраняется в
+`AppSettings.activeASRModelID`.
+
+Импорт не доверяет расширению файла. Перед регистрацией Cribe реально открывает GGUF
+через `transcribe.cpp`; неизвестные architecture/variant и повреждённые файлы
+отбрасываются. Успешно импортированный файл копируется в управляемый каталог Cribe.
+
+#### Runtime transcribe.cpp
+
+Используется **handy-computer/transcribe.cpp v0.2.3**.
+
+SwiftPM подключает официальный release artifact как binary target:
+
+- asset: `TranscribeCpp.xcframework.zip`;
+- SHA-256 / SwiftPM checksum:
+  `944be4d5232f39c99608f676a2ddda2516e0ed3c9fb6db50685ffa8d20a8b9c9`;
+- macOS arm64: Metal + CPU.
+
+Поскольку отдельный SwiftPM mirror `TranscribeCpp` на момент интеграции ещё не
+опубликован, официальный Swift wrapper **той же версии v0.2.3** vendored в
+`Vendor/TranscribeCpp/Sources/TranscribeCpp`. Лицензия и third-party notices лежат
+рядом в `Vendor/TranscribeCpp/`.
+
+Не добавлять Python, localhost API, Tauri/Rust runtime или отдельный процесс:
+`transcribe.cpp` работает внутри процесса Cribe.
+
+#### Штатная GigaAM
+
+Закреплена модель:
+
+- `GigaAM v3 E2E-RNN-T Q8_0`;
+- repo: `handy-computer/gigaam-v3-e2e-rnnt-gguf`;
+- файл: `gigaam-v3-e2e-rnnt-Q8_0.gguf`;
+- размер: `273724832` bytes (~261 MiB);
+- SHA-256:
+  `78d63b47723b7f8d78c6113a6ef983b5a86e2a86f6c273e1f5cb6967b1c4467a`;
+- язык: русский;
+- E2E-вариант сам выдаёт регистр и пунктуацию;
+- translate/lang-detect модель не поддерживает.
+
+Загрузка идёт во временный staging-файл. До переноса в постоянный каталог обязательно
+проверяются SHA-256 и реальная загрузка через `TranscribeCppEngine.inspectModel`.
+Повреждённый/подменённый файл активировать нельзя.
+
+#### Где лежат модели
+
+Управляемый каталог:
+
+`~/Library/Application Support/Cribe/models/`
+
+В нём:
+
+- `gigaam-v3-e2e-rnnt-Q8_0.gguf` — штатная GigaAM;
+- `imported/*.gguf` — пользовательские модели;
+- `registry.json` — метаданные импортированных моделей.
+
+Parakeet продолжает жить в штатном cache FluidAudio и не переносится в этот каталог.
+
+#### Архитектура и lifecycle RAM
+
+`TranscribeCppEngine` реализует существующий `TranscriptionEngine`. Поэтому основной
+pipeline не раздвоен:
+
+```text
+DictationController
+       ↓
+EngineGate
+       ↓
+TranscriptionEngine
+   ├── ParakeetEngine → FluidAudio
+   └── TranscribeCppEngine → GGUF → transcribe.cpp → ggml/Metal
+```
+
+`EngineGate` теперь не владеет одной моделью пожизненно. Конкретный engine снимается в
+`DictationSession` **на старте диктовки**. Это критично:
+
+- переключение модели относится только к следующей диктовке;
+- уже записанная/стоящая в очереди речь заканчивает обработку на старой модели;
+- общий gate всё равно сериализует тяжёлые ASR-проходы;
+- менеджер держит сильную ссылку только на текущий active engine;
+- после переключения старый engine остаётся в RAM лишь пока существуют уже начатые с ним
+  `DictationSession`, затем ARC освобождает модель/Metal resources.
+
+Старый `DictationController(engine:...)` сохранён как convenience-init для тестов и CLI;
+приложение использует новый `engineProvider`.
+
+#### Ограничения совместимых GGUF
+
+«GGUF» не означает «любая GGUF-модель». Cribe принимает только файл, который умеет
+загрузить зафиксированная версия `transcribe.cpp` как ASR-модель.
+
+Метаданные `general.architecture`, `stt.variant`, languages/capabilities читаются из
+реально загруженной модели. Обычные текстовые LLM GGUF сюда не подходят.
+
+GigaAM v3 обучена для сравнительно коротких utterance (ориентир transcribe.cpp — около
+25 секунд). Runtime более длинную запись не отвергает, но предупреждает о возможном
+снижении точности. Cribe пока не вводит отдельный GigaAM-only long-form splitter:
+существующий VAD и общий pipeline остаются едиными для всех движков.
+
+#### Изменённые/добавленные файлы
+
+- `Package.swift`
+  — binary target CTranscribe + vendored Swift wrapper target.
+- `Vendor/TranscribeCpp/**`
+  — официальный Swift binding v0.2.3, LICENSE и THIRD-PARTY-LICENSES.
+- `Sources/CribeCore/ASR/TranscribeCppEngine.swift`
+  — generic GGUF backend + runtime validation.
+- `Sources/CribeCore/ASR/ASRModelID.swift`
+  — стабильные persisted model IDs.
+- `Sources/CribeCore/Support/AppSettings.swift`
+  — persistence активной ASR-модели.
+- `Sources/CribeCore/Pipeline/DictationController.swift`
+  — engine snapshot на одну DictationSession и общий multi-engine gate.
+- `Sources/Cribe/ModelInstall.swift`
+  — единый registry/download/import/delete/lifecycle manager.
+- `Sources/Cribe/App.swift`
+  — provider активного движка и warm-up выбранной модели.
+- `Sources/Cribe/SettingsView.swift`
+  — список моделей, GigaAM download/select/delete, системный GGUF importer,
+  transcribe.cpp credit.
+- `Tests/CribeCoreTests/TranscribeCppEngineTests.swift`
+  — invalid-GGUF gate + opt-in real-model smoke.
+- `Tests/CribeCoreTests/AppSettingsTests.swift`
+  — default/persistence выбора ASR.
+- `Tests/CribeCoreTests/EngineGateTests.swift`
+  — новый explicit-engine contract.
+- `Tests/CribeAppTests/ModelInstallTests.swift`
+  — built-ins, fallback при пропавшей модели, invalid import не попадает в registry.
+- `.github/workflows/gigaam-smoke.yml`
+  — отдельный real-model acceptance gate, чтобы обычный CI не скачивал ~261 MiB каждый раз.
+
+#### Проверка до merge
+
+Полный CI для feature-кода:
+
+- run `35910850715` — **success**;
+- `swift build` — success;
+- CribeCoreTests — success;
+- CribeAppTests — success.
+
+Real-model GigaAM gate:
+
+- run `35910850966` — **success**;
+- скачан ровно закреплённый Q8_0;
+- SHA-256 проверен;
+- скачан официальный `transcribe.cpp/samples/ru.wav`;
+- реальный `TranscribeCppEngine` на Q8_0 распознал:
+  `Важно различать глаголы и дополнения.`
+- результат совпал с опубликованным acceptance observable семейства GigaAM в
+  `transcribe.cpp`.
+
+Финальную `Cribe.app` после merge всё равно проверять штатным
+`Build Cribe.app`: `scripts/build-app.sh` + codesign + Artifact.
+
 ### 2026-09-23 — Hold menu-tracking stuck-recording fix
 
 После реального теста найден отдельный класс бага: Option меняет alternate items в

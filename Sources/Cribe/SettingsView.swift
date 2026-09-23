@@ -2,6 +2,7 @@ import AppKit
 import KeyboardShortcuts
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 import CribeCore
 
 /// Раздел настроек: строка бокового списка и панель за ней.
@@ -129,6 +130,9 @@ private struct GeneralPane: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchNote: String?
     @State private var accessibilityGranted = TextInserter.hasAccessibility
+    @State private var importingGGUF = false
+    @State private var modelError: String?
+    private static let ggufType = UTType(filenameExtension: "gguf") ?? .data
     /// Сколько записей лежит на диске прямо сейчас: обещание «предсказуемый объём» стоит
     /// ровно столько, сколько его видно.
     @State private var recordingBytes = RecordingStore.shared.bytesOnDisk()
@@ -271,20 +275,50 @@ private struct GeneralPane: View {
             }
 
             Section {
-                ModelRow(install: install)
+                ForEach(install.entries) { entry in
+                    ModelRow(
+                        entry: entry,
+                        install: install,
+                        onError: { modelError = $0 }
+                    )
+                }
+
+                Button {
+                    modelError = nil
+                    importingGGUF = true
+                } label: {
+                    Label("Добавить GGUF…", systemImage: "plus")
+                }
+
+                if let modelError {
+                    Text(modelError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if legacyBytes > 0 {
                     LegacyModelsRow(bytes: $legacyBytes)
                 }
             } header: {
                 Text("Модель распознавания")
             } footer: {
-                caption(
-                    "Parakeet TDT v3 от NVIDIA — одна многоязычная модель на все три языка. "
-                        + "Качается один раз (~600 МБ) и остаётся в кэше; дальше распознавание "
-                        + "идёт без интернета. Английские названия она пишет кириллицей — "
-                        + "латиницу им возвращает AI-чистка, поэтому через неё идёт каждая "
-                        + "диктовка, даже однословная."
-                )
+                VStack(alignment: .leading, spacing: 4) {
+                    caption(
+                        "Parakeet остаётся многоязычной моделью по умолчанию. GigaAM v3 "
+                            + "E2E-RNN-T Q8_0 — русская GGUF-модель (~261 МиБ), работающая "
+                            + "внутри Cribe через transcribe.cpp."
+                    )
+                    caption(
+                        "«Добавить GGUF…» принимает не любой файл с таким расширением: "
+                            + "перед добавлением Cribe полностью открывает модель через "
+                            + "transcribe.cpp. Неизвестная ASR-архитектура не регистрируется."
+                    )
+                    caption(
+                        "Смена модели относится к следующей диктовке. Уже записанная речь "
+                            + "заканчивает обработку на той модели, с которой была начата."
+                    )
+                }
             }
 
             Section {
@@ -361,6 +395,31 @@ private struct GeneralPane: View {
             }
         }
         .settingsForm()
+        .fileImporter(
+            isPresented: $importingGGUF,
+            allowedContentTypes: [Self.ggufType],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .failure(let error):
+                modelError = error.localizedDescription
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                modelError = nil
+                Task {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if scoped { url.stopAccessingSecurityScopedResource() }
+                    }
+                    do {
+                        let id = try await install.importGGUF(from: url)
+                        try install.activate(id)
+                    } catch {
+                        modelError = error.localizedDescription
+                    }
+                }
+            }
+        }
         .onAppear {
             syncLaunchState()
             // Разрешение выдают в системном окне — при возврате в настройки перечитываем.
@@ -401,35 +460,98 @@ private struct GeneralPane: View {
     }
 }
 
-/// Единственная модель распознавания: её состояние и, если её ещё нет, кнопка «Скачать».
-/// Удалить её отсюда нельзя — без неё приложение не работает вовсе, и кнопка «Удалить»
-/// означала бы «сломать диктовку».
+/// Одна строка универсального реестра моделей.
 private struct ModelRow: View {
+    let entry: ModelInstall.ModelEntry
     @ObservedObject var install: ModelInstall
+    let onError: (String) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            Text("Parakeet TDT v3")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.displayName)
+                HStack(spacing: 5) {
+                    Text(entry.detail)
+                    if let bytes = entry.approximateBytes {
+                        Text("·")
+                        Text(Self.size(bytes))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Spacer(minLength: 8)
-            switch install.state {
+
+            switch install.state(for: entry.id) {
             case .missing:
-                Text("Не скачана · ≈" + Self.size(ModelInstall.approximateBytes))
-                    .foregroundStyle(.secondary)
-                Button("Скачать") { install.download() }
+                Button("Скачать") { install.download(entry.id) }
+                    .buttonStyle(.bordered)
+
             case let .downloading(fraction):
-                ProgressView(value: fraction).frame(width: 120)
-                Text(fraction.formatted(.percent.precision(.fractionLength(0))))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                if fraction > 0 {
+                    ProgressView(value: fraction).frame(width: 90)
+                    Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Скачивание…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
             case .preparing:
                 ProgressView().controlSize(.small)
-                Text("Подготовка…").foregroundStyle(.secondary)
+                Text("Проверка…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
             case .ready:
-                Label("Готова", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                if install.isActive(entry.id) {
+                    Label("Выбрана", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Button("Выбрать") {
+                        do {
+                            try install.activate(entry.id)
+                        } catch {
+                            onError(error.localizedDescription)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if entry.removable {
+                    Button("Удалить", role: .destructive) {
+                        do {
+                            try install.removeModel(entry.id)
+                        } catch {
+                            onError(error.localizedDescription)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
+
             case let .failed(message):
-                Text(message).foregroundStyle(.red).lineLimit(2)
-                Button("Ещё раз") { install.download() }
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                if !entry.imported {
+                    Button("Ещё раз") { install.download(entry.id) }
+                        .buttonStyle(.bordered)
+                }
+                if entry.removable {
+                    Button("Удалить", role: .destructive) {
+                        do {
+                            try install.removeModel(entry.id)
+                        } catch {
+                            onError(error.localizedDescription)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
         }
     }
@@ -762,6 +884,11 @@ private struct AboutPane: View {
             "FluidAudio",
             "определение речи и тишины",
             URL(string: "https://github.com/FluidInference/FluidAudio")!
+        ),
+        (
+            "transcribe.cpp",
+            "GGUF-модели распознавания через ggml / Metal",
+            URL(string: "https://github.com/handy-computer/transcribe.cpp")!
         ),
         (
             "KeyboardShortcuts",

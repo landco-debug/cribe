@@ -30,7 +30,7 @@ final class AppCore: ObservableObject {
     let settings = AppSettings.shared
     let history = HistoryStore.shared
     let learner = EditLearner.shared
-    let engine = ParakeetEngine()
+    let models = ModelInstall.shared
     let dictionary = UserDictionary(url: UserDictionary.defaultURL)
     let controller: DictationController
     /// Свёрнутый до двух величин срез конвейера для меню — чтобы поток уровня микрофона
@@ -104,12 +104,17 @@ final class AppCore: ObservableObject {
     private let logger = Logger(subsystem: "online.nazarovych.cribe", category: "Hotkey")
 
     private init() {
-        let controller = DictationController(engine: engine, dictionary: dictionary, settings: settings)
+        let models = self.models
+        let controller = DictationController(
+            engineProvider: { models.activeEngine() },
+            dictionary: dictionary,
+            settings: settings
+        )
         self.controller = controller
         menu = MenuState(controller: controller, settings: settings)
         let seenOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
         needsOnboarding = !seenOnboarding
-        needsModelUpdate = seenOnboarding && !ParakeetEngine.isInstalled
+        needsModelUpdate = seenOnboarding && !models.activeModelIsInstalled
         // Чаймы синтезируются заранее: на первом хоткее звук иначе опаздывал.
         SoundPlayer.preload()
     }
@@ -125,10 +130,10 @@ final class AppCore: ObservableObject {
     /// полгигабайта без спроса нельзя, об этом спрашивает отдельный экран. Ошибку тоже
     /// глотаем: это прогрев, а не работа, и настоящая диктовка сообщит о беде сама.
     private func warmUpModel() {
-        guard ParakeetEngine.isInstalled else { return }
-        let engine = self.engine
+        guard models.activeModelIsInstalled else { return }
+        let engine = models.activeEngine()
         let language = settings.language
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) {
             try? await engine.prepare(language: language) { _ in }
         }
     }
