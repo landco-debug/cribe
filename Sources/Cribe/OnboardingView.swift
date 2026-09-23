@@ -45,7 +45,7 @@ struct OnboardingView: View {
         OnboardingProgress(
             micGranted: micStatus == .authorized,
             accessibilityGranted: accessibilityGranted,
-            modelInstalled: install.isReady,
+            modelInstalled: install.hasAnyReadyModel,
             // Ключ OpenAI — такая же настроенность, как и вход в ChatGPT: шаг закрывают оба.
             gptAuthorized: signIn.isAuthorized || apiKeyPresent,
             modelsSkipped: modelsSkipped,
@@ -243,49 +243,80 @@ struct OnboardingView: View {
     @ViewBuilder
     private var modelsBody: some View {
         caption(
-            "Одна модель на все три языка — Parakeet TDT v3 от NVIDIA. Загрузка разовая, "
-                + "дальше распознавание идёт прямо на этом компьютере, без интернета."
+            "Выберите локальную модель. Cribe ничего не скачивает автоматически: "
+                + "загрузка начинается только после вашего нажатия."
         )
+
+        ForEach(install.entries.filter { !$0.imported }) { entry in
+            onboardingModelRow(entry)
+        }
+
+        Button("Другую модель…") { openSettings() }
+            .buttonStyle(.bordered)
+        caption("В настройках можно добавить совместимый GGUF или legacy Whisper .bin.")
+
+        HStack(spacing: 10) {
+            Button("Позже") { modelsSkipped = true }
+            caption("Без установленной модели диктовка не начнётся и ничего сама не скачает.")
+        }
+        .font(.callout)
+    }
+
+    @ViewBuilder
+    private func onboardingModelRow(_ entry: ModelInstall.ModelEntry) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Parakeet TDT v3")
-                Text("≈" + Self.size(ModelInstall.approximateBytes))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(entry.displayName)
+                HStack(spacing: 4) {
+                    Text(entry.detail)
+                    if let bytes = entry.approximateBytes {
+                        Text("·")
+                        Text("≈" + Self.size(bytes))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .frame(width: 150, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            switch install.state {
-            case .missing, .failed:
-                Button("Скачать") { install.download() }
+            switch install.state(for: entry.id) {
+            case .missing:
+                Button("Скачать") { install.download(entry.id) }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                Spacer()
-            case .downloading(let fraction):
+
+            case let .downloading(fraction):
                 ProgressView(value: fraction)
+                    .frame(width: 90)
                 Text("\(Int(fraction * 100)) %")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+
             case .preparing:
                 ProgressView().controlSize(.small)
-                Text("Подготовка под Neural Engine…")
+                Text("Проверка…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
+
             case .ready:
-                Label("Готова", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Spacer()
+                if install.isActive(entry.id) {
+                    Label("Выбрана", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Button("Выбрать") { try? install.activate(entry.id) }
+                        .buttonStyle(.bordered)
+                }
+
+            case .failed:
+                Button("Ещё раз") { install.download(entry.id) }
+                    .buttonStyle(.bordered)
             }
         }
-        if case .failed(let message) = install.state {
-            Text(message).font(.caption).foregroundStyle(.red)
+
+        if case .failed(let message) = install.state(for: entry.id) {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
         }
-        HStack(spacing: 10) {
-            Button("Позже") { modelsSkipped = true }
-            caption("Первая диктовка скачает модель сама.")
-        }
-        .font(.callout)
     }
 
     private static func size(_ bytes: Int64) -> String {
