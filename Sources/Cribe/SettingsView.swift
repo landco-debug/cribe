@@ -130,9 +130,12 @@ private struct GeneralPane: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchNote: String?
     @State private var accessibilityGranted = TextInserter.hasAccessibility
-    @State private var importingGGUF = false
+    @State private var importingModel = false
     @State private var modelError: String?
-    private static let ggufType = UTType(filenameExtension: "gguf") ?? .data
+    private static let modelFileTypes: [UTType] = [
+        UTType(filenameExtension: "gguf") ?? .data,
+        UTType(filenameExtension: "bin") ?? .data,
+    ]
     /// Сколько записей лежит на диске прямо сейчас: обещание «предсказуемый объём» стоит
     /// ровно столько, сколько его видно.
     @State private var recordingBytes = RecordingStore.shared.bytesOnDisk()
@@ -285,9 +288,9 @@ private struct GeneralPane: View {
 
                 Button {
                     modelError = nil
-                    importingGGUF = true
+                    importingModel = true
                 } label: {
-                    Label("Добавить GGUF…", systemImage: "plus")
+                    Label("Добавить модель…", systemImage: "plus")
                 }
 
                 if let modelError {
@@ -305,14 +308,14 @@ private struct GeneralPane: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     caption(
-                        "Parakeet остаётся многоязычной моделью по умолчанию. GigaAM v3 "
-                            + "E2E-RNN-T Q8_0 — русская GGUF-модель (~261 МиБ), работающая "
-                            + "внутри Cribe через transcribe.cpp."
+                        "Ничего не скачивается автоматически. Parakeet — многоязычная модель, "
+                            + "GigaAM v3 E2E-RNN-T Q8_0 — русская GGUF-модель (~261 МиБ), "
+                            + "работающая внутри Cribe через transcribe.cpp."
                     )
                     caption(
-                        "«Добавить GGUF…» принимает не любой файл с таким расширением: "
-                            + "перед добавлением Cribe полностью открывает модель через "
-                            + "transcribe.cpp. Неизвестная ASR-архитектура не регистрируется."
+                        "«Добавить модель…» принимает GGUF и совместимые legacy Whisper .bin. "
+                            + "Расширению Cribe не доверяет: перед добавлением файл полностью "
+                            + "открывается через transcribe.cpp; неподдерживаемая модель не регистрируется."
                     )
                     caption(
                         "Смена модели относится к следующей диктовке. Уже записанная речь "
@@ -396,8 +399,8 @@ private struct GeneralPane: View {
         }
         .settingsForm()
         .fileImporter(
-            isPresented: $importingGGUF,
-            allowedContentTypes: [Self.ggufType],
+            isPresented: $importingModel,
+            allowedContentTypes: Self.modelFileTypes,
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -412,7 +415,7 @@ private struct GeneralPane: View {
                         if scoped { url.stopAccessingSecurityScopedResource() }
                     }
                     do {
-                        let id = try await install.importGGUF(from: url)
+                        let id = try await install.importModel(from: url)
                         try install.activate(id)
                     } catch {
                         modelError = error.localizedDescription
@@ -424,7 +427,7 @@ private struct GeneralPane: View {
             syncLaunchState()
             // Разрешение выдают в системном окне — при возврате в настройки перечитываем.
             accessibilityGranted = TextInserter.hasAccessibility
-            // Модель могла доехать мимо настроек — например, её дотянула первая диктовка.
+            // Модель могла доехать мимо настроек — например, загрузка закончилась в фоне.
             install.refresh()
             recordingBytes = RecordingStore.shared.bytesOnDisk()
             legacyBytes = LegacyWhisperCache.shared.bytesOnDisk()
