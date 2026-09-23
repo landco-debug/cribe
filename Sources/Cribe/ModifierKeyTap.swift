@@ -221,7 +221,9 @@ final class ModifierKeyTap {
     private func scheduleHoldStart() {
         cancelPendingHoldStart()
         holdStartTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(ModifierHoldDetector.activationDelay))
+            try? await Task.sleep(
+                for: .milliseconds(Int64(ModifierHoldDetector.activationDelay * 1_000))
+            )
             guard !Task.isCancelled, let self, self.behavior == .hold else { return }
             self.holdStartTask = nil
             guard self.holdDetector.activate(at: ProcessInfo.processInfo.systemUptime) else { return }
