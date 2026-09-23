@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   build:
-    name: Cribe.app (Apple Silicon)
+    name: Cribe — GigaAM-GGUF-TranscribeCpp (Apple Silicon)
     runs-on: macos-26
 
     steps:
@@ -44,6 +44,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon
-          path: Cribe-macOS-Apple-Silicon.zip
+          path: Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip
           if-no-files-found: error
           retention-days: 30
