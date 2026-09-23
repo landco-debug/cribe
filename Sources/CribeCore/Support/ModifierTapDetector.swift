@@ -74,3 +74,119 @@ public struct ModifierTapDetector {
         pressedAt = nil
     }
 }
+
+
+/// Событие, которое детектор удержания отдаёт оболочке CGEventTap.
+public enum ModifierHoldAction: Equatable, Sendable {
+    case none
+    case arm
+    case finish
+    case cancel
+}
+
+/// Push-to-talk вариант того же правила, что у ModifierTapDetector.
+///
+/// Обычные сочетания macOS должны остаться обычными сочетаниями, поэтому запись не
+/// начинается на самом flagsChanged. Сначала идёт короткое защитное окно: если за это
+/// время появляется другая клавиша, модификатор, клик или скролл, ожидание снимается.
+///
+/// После реального старта любой такой ввод отменяет запись целиком. События при этом
+/// слушаются .listenOnly в ModifierKeyTap, так что Cmd-C, Cmd-Tab, Option-Left и мышиные
+/// аккорды продолжают доходить до macOS/приложения нетронутыми.
+public struct ModifierHoldDetector {
+    /// Компромисс между «не мигать на обычном Cmd-C» и отзывчивостью push-to-talk.
+    /// Стартовый чайм сообщает, когда удержание принято и можно говорить.
+    public static let activationDelay: TimeInterval = 0.20
+
+    private enum State {
+        case idle
+        case pending(TimeInterval)
+        case active
+        /// Текущий физический hold уже испорчен аккордом; ждём отпускания своей клавиши.
+        case suppressed
+    }
+
+    private let keyCode: Int64
+    private let deviceFlag: UInt64
+    private let blockingFlags: UInt64
+    private var state: State = .idle
+
+    public init(
+        keyCode: Int64 = ModifierTapDetector.rightCommandKeyCode,
+        deviceFlag: UInt64 = ModifierTapDetector.rightCommandFlag,
+        blockingFlags: UInt64 = 0
+    ) {
+        self.keyCode = keyCode
+        self.deviceFlag = deviceFlag
+        self.blockingFlags = blockingFlags
+    }
+
+    /// .arm означает только «завести таймер» — микрофон ещё не включается.
+    /// .finish бывает исключительно после подтверждённого удержания.
+    public mutating func flagsChanged(
+        keyCode: Int64,
+        flags: UInt64,
+        at time: TimeInterval
+    ) -> ModifierHoldAction {
+        guard keyCode == self.keyCode else {
+            return suppressForChord()
+        }
+
+        if flags & deviceFlag != 0 {
+            guard flags & blockingFlags == 0 else {
+                state = .suppressed
+                return .none
+            }
+            // Повторное flagsChanged своей клавиши не должно переармить уже живую запись.
+            if case .active = state { return .none }
+            state = .pending(time)
+            return .arm
+        }
+
+        let previous = state
+        state = .idle
+        if case .active = previous { return .finish }
+        return .none
+    }
+
+    /// Таймер защитного окна истёк. true — удержание всё ещё чистое и теперь активно.
+    public mutating func activate(at time: TimeInterval) -> Bool {
+        guard case .pending(let pressedAt) = state else { return false }
+        guard time - pressedAt >= Self.activationDelay else { return false }
+        state = .active
+        return true
+    }
+
+    /// Клавиша/мышь во время удержания. Возвращает true, если запись уже успела
+    /// стартовать и её нужно отменить; pending-состояние просто гасится без записи.
+    @discardableResult
+    public mutating func cancel() -> Bool {
+        switch state {
+        case .active:
+            state = .suppressed
+            return true
+        case .pending:
+            state = .suppressed
+            return false
+        case .idle, .suppressed:
+            return false
+        }
+    }
+
+    public mutating func reset() {
+        state = .idle
+    }
+
+    private mutating func suppressForChord() -> ModifierHoldAction {
+        switch state {
+        case .active:
+            state = .suppressed
+            return .cancel
+        case .pending:
+            state = .suppressed
+            return .none
+        case .idle, .suppressed:
+            return .none
+        }
+    }
+}
