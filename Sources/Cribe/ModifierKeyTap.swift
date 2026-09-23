@@ -16,6 +16,27 @@ enum ModifierKeyGesture: Sendable {
     case holdCancelled
 }
 
+/// Решение резервной сверки с состоянием WindowServer.
+/// Порядок принципиален: если click и release обнаружились одновременно после menu
+/// tracking, click означает системный аккорд, поэтому отмена сильнее обычного завершения.
+enum ModifierHoldReconciliation: Equatable {
+    case keep
+    case cancel
+    case release
+}
+
+func modifierHoldReconciliation(
+    inputChanged: Bool,
+    blockingModifierDown: Bool,
+    mouseButtonDown: Bool,
+    keyDown: Bool
+) -> ModifierHoldReconciliation {
+    if inputChanged || blockingModifierDown || mouseButtonDown {
+        return .cancel
+    }
+    return keyDown ? .keep : .release
+}
+
 @MainActor
 final class ModifierKeyTap {
     /// NSSystemDefined (raw 14) — именно этим типом AppKit/HID доставляет специальные
@@ -301,20 +322,7 @@ final class ModifierKeyTap {
     /// использует тот же keyState-подход для проверки физически удерживаемых modifiers.
     private var holdIsStillEligible: Bool {
         guard let baseline = holdInputBaseline else { return false }
-        let state: CGEventSourceStateID = .combinedSessionState
-
-        guard CGEventSource.keyState(state, key: keyCode) else { return false }
-        guard CGEventSource.flagsState(state).rawValue & blockingFlags == 0 else { return false }
-        guard InputCounters.current() == baseline else { return false }
-
-        // Если кнопку мыши уже держали в момент первого снимка, counter ещё мог не
-        // измениться. Текущее buttonState закрывает и этот случай.
-        guard !CGEventSource.buttonState(state, button: .left),
-              !CGEventSource.buttonState(state, button: .right),
-              !CGEventSource.buttonState(state, button: .center)
-        else { return false }
-
-        return true
+        return reconciliation(since: baseline) == .keep
     }
 
     /// Страховка от «вечной записи». Во время активного hold периодически сверяемся с
@@ -330,24 +338,33 @@ final class ModifierKeyTap {
                 guard !Task.isCancelled, let self, self.behavior == .hold else { return }
 
                 guard let baseline = self.holdInputBaseline else { return }
-                let state: CGEventSourceStateID = .combinedSessionState
-
-                if InputCounters.current() != baseline
-                    || CGEventSource.flagsState(state).rawValue & self.blockingFlags != 0
-                    || CGEventSource.buttonState(state, button: .left)
-                    || CGEventSource.buttonState(state, button: .right)
-                    || CGEventSource.buttonState(state, button: .center)
-                {
+                switch self.reconciliation(since: baseline) {
+                case .keep:
+                    continue
+                case .cancel:
                     self.cancelHold()
                     return
-                }
-
-                if !CGEventSource.keyState(state, key: self.keyCode) {
+                case .release:
                     self.releaseHoldFromSystemState()
                     return
                 }
             }
         }
+    }
+
+    private func reconciliation(since baseline: InputCounters) -> ModifierHoldReconciliation {
+        let state: CGEventSourceStateID = .combinedSessionState
+        let mouseDown =
+            CGEventSource.buttonState(state, button: .left)
+            || CGEventSource.buttonState(state, button: .right)
+            || CGEventSource.buttonState(state, button: .center)
+
+        return modifierHoldReconciliation(
+            inputChanged: InputCounters.current() != baseline,
+            blockingModifierDown: CGEventSource.flagsState(state).rawValue & blockingFlags != 0,
+            mouseButtonDown: mouseDown,
+            keyDown: CGEventSource.keyState(state, key: keyCode)
+        )
     }
 
     private func releaseHoldFromSystemState() {
