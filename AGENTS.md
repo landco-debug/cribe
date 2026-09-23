@@ -158,6 +158,199 @@ Esc остаётся глобальным listen-only `KeyDownTap` и во вр�
 `cancelDictation()`: звук выбрасывается, распознавание/чистка/вставка не запускаются,
 а последующее отпускание — no-op.
 
+#### Итоговая спецификация hold-to-dictate после реальных тестов
+
+Этот подраздел — полный handoff по функции из отдельного чата. Его нужно читать целиком
+перед любыми дальнейшими изменениями хоткеев: функция уже прошла несколько итераций
+исправлений на реальном macOS Sequoia и не должна быть упрощена обратно до «таймер +
+flagsChanged».
+
+##### Пользовательское поведение
+
+Для выбранной стороны (`Правый ⌘` или `Левый ⌘`) в настройках есть два режима:
+
+- **Нажатие — старт / стоп** — прежнее поведение Cribe;
+- **Удержание — пока зажата** — push-to-talk.
+
+В hold-режиме:
+
+- выбранный ⌘ запускает обычную диктовку после защитного удержания ~0,6 с;
+- соответствующий ⌥ делает то же самое, но с переводом;
+- отпускание физической клавиши завершает только существующую запись и отправляет её
+  в распознавание;
+- быстрый tap модификатора ничего не делает;
+- пользовательские `KeyboardShortcuts` остаются toggle и к hold-режиму не привязаны;
+- режим сохраняется через `AppSettings.dictationKeyBehavior`;
+- default остаётся `.toggle`, чтобы обновление форка не меняло привычное поведение само.
+
+##### Escape
+
+Во время hold-сессии `Esc` должен полностью **отменить** запись:
+
+- аудио выбрасывается;
+- транскрибация/cleanup/вставка не запускаются;
+- последующее отпускание всё ещё физически зажатого ⌘/⌥ является no-op.
+
+Для этого в `DictationController` существуют отдельные методы:
+
+- `startDictation(translating:)`;
+- `finishDictation()`.
+
+**Не заменять release-событие на `toggle()`**. Иначе после сценария
+`hold → Esc → release` отпускание запустит новую пустую запись.
+
+##### Совместимость с обычными сочетаниями macOS
+
+Режим должен оставаться максимально нативным и не «съедать» системные действия.
+
+`ModifierKeyTap` остаётся `CGEventTap(... options: .listenOnly ...)`, то есть Cribe не
+подавляет исходные события и не делает synthetic replay.
+
+Защитный порог hold — **0,60 с** (`ModifierHoldDetector.activationDelay`), совпадает с
+upstream `ModifierTapDetector.holdLimit`.
+
+До старта и во время hold аккорд отменяют:
+
+- `keyDown` и `keyUp`;
+- left/right/other mouse down/up;
+- left/right/other mouse drag;
+- scroll wheel;
+- другой modifier;
+- системные consumer keys (Volume/Brightness/Media), которые приходят как
+  `NSSystemDefined`.
+
+На первом `flagsChanged` выбранной ⌘/⌥ также проверяются уже удерживаемые Shift,
+Control, Fn и противоположная клавиша того же семейства. Это закрывает случаи, когда
+другой modifier был нажат раньше и нового события от него уже не будет.
+
+Проверенные классы сочетаний, которые не должны запускать/оставлять диктовку:
+
+- Cmd-C / Cmd-V / Cmd-A / Cmd-Tab;
+- Option-Left / Option-Right;
+- Command-click / drag / scroll;
+- Shift+Option+Volume Up/Down;
+- Option + работа с alternate-item в нативном меню macOS.
+
+##### Отдельный баг: Option + модифицированное меню
+
+Нативные `NSMenu` используют nested event-tracking loop. В реальном тесте это приводило
+к сценарию:
+
+`Option hold → неторопливый click по alternate menu item → release Option`
+
+При одной только event-tap state machine конкретный mouse/flagsChanged callback мог
+дойти с задержкой относительно фактического состояния WindowServer. Запись могла
+остаться активной после физического release и требовать `Esc`.
+
+Финальное исправление добавляет **резервную сверку с WindowServer**, не меняя
+`.listenOnly` архитектуру:
+
+- `CGEventSource.keyState(.combinedSessionState, key:)` — реально ли удерживается
+  конкретная левая/правая ⌘/⌥;
+- `CGEventSource.flagsState` — нет ли блокирующих modifiers;
+- `CGEventSource.buttonState` — нет ли физически удерживаемой кнопки мыши;
+- `CGEventSource.counterForEventType` — менялись ли key/mouse/drag/scroll события после
+  снимка на press.
+
+На press сохраняется baseline этих счётчиков. Перед стартом hold состояние сверяется
+повторно. После старта работает watchdog примерно раз в 25 мс.
+
+При конфликте приоритет такой:
+
+1. обнаружен click/key/scroll/другой modifier → **cancel**;
+2. только физический release выбранной клавиши → **finish**;
+3. клавиша всё ещё удерживается и побочного ввода нет → **keep**.
+
+Особенно важно: если после menu tracking одновременно видны и click, и уже отпущенный
+Option, **cancel имеет приоритет над finish**. Это системный жест с Option, а не диктовка.
+
+Перед обычным `finishHold()` выполняется ещё одна сверка WindowServer, чтобы задержанный
+menu-click не был ошибочно принят за нормальное окончание записи.
+
+##### Архитектурное ограничение
+
+Пассивный `.listenOnly` listener не умеет знать будущее. Если человек намеренно держит
+выбранный modifier дольше 0,6 с, дождался старта диктовки и только потом начал системный
+аккорд, окно записи теоретически может кратко появиться до второго события. Как только
+второе событие появляется, сессия отменяется.
+
+Полностью устранить даже краткий старт можно только активной схемой уровня Karabiner
+`lazy modifier`: задерживать исходный modifier, а затем решать, передавать его системе
+или использовать как hold. Это намного более инвазивно и сознательно **не внедрено**,
+пока нет отдельной задачи изменить базовую архитектуру ввода.
+
+##### Файлы этой функции
+
+- `Sources/CribeCore/Support/AppSettings.swift`
+  - `DictationKeyBehavior { toggle, hold }`;
+  - persistence `dictationKeyBehavior`.
+
+- `Sources/CribeCore/Support/ModifierTapDetector.swift`
+  - `ModifierHoldDetector`;
+  - `ModifierHoldAction`;
+  - activation delay = upstream hold limit 0,6 с.
+
+- `Sources/Cribe/ModifierKeyTap.swift`
+  - режимы tap/hold;
+  - listen-only CGEventTap;
+  - расширенная event mask;
+  - `NSSystemDefined`;
+  - pre-held modifier blocking;
+  - WindowServer baseline + reconciliation + watchdog;
+  - правило cancel > finish при menu interaction.
+
+- `Sources/Cribe/App.swift`
+  - wiring hold gestures для правой/левой пары ⌘/⌥;
+  - обычная диктовка и диктовка с переводом;
+  - реакция на изменение `dictationKeyBehavior`.
+
+- `Sources/Cribe/SettingsView.swift`
+  - Picker `Режим кнопки`;
+  - подписи hold-режима.
+
+- `Sources/CribeCore/Pipeline/DictationController.swift`
+  - `startDictation(translating:)`;
+  - `finishDictation()`;
+  - release после Esc безопасен и не перезапускает запись.
+
+- `Tests/CribeCoreTests/ModifierTapDetectorTests.swift`
+  - hold threshold;
+  - quick tap;
+  - chord cancellation;
+  - pre-held modifier blocking.
+
+- `Tests/CribeCoreTests/AppSettingsTests.swift`
+  - default `.toggle`;
+  - persistence `.hold`.
+
+- `Tests/CribeCoreTests/DictationControllerTests.swift`
+  - hold start/release;
+  - `Esc → release` не запускает новую запись.
+
+- `Tests/CribeAppTests/ModifierHoldReconciliationTests.swift`
+  - keep/release/cancel;
+  - `menu click + release => cancel`.
+
+##### Ключевые commits по этой функции
+
+- `6dd2fb5209848478ac431be0c8b68532258ae3a8`
+  — первая рабочая реализация hold-to-dictate;
+- `2f28162923f3ed352e50777cdf077d0e6ef95556`
+  — защита от системных shortcut conflicts, 0,6 с, consumer keys;
+- `5c4505b16f61df09def13890bcba0efc37461933`
+  — финальный на данный момент fix Option/menu tracking и stuck recording.
+
+На commit `5c4505b16f61df09def13890bcba0efc37461933` успешно прошли:
+
+- `swift build`;
+- CribeCoreTests;
+- CribeAppTests;
+- официальный `scripts/build-app.sh`;
+- `codesign --verify --deep --strict`;
+- упаковка готового `Cribe.app`.
+
+После установки этой сборки пользователь подтвердил в реальном использовании:
+**«Вроде бы всё работает как надо»**.
 ## 3. GitHub Actions: готовый Cribe.app
 
 В upstream уже был `.github/workflows/ci.yml`, который делает `swift build` и тесты,
@@ -360,6 +553,11 @@ mouse/flagsChanged события в нашем event tap. В результат
 физическое pressed-state и защищается от несбалансированных key_down/key_up, чтобы не
 получать stuck keys.
 
+Основной commit:
+`5c4505b16f61df09def13890bcba0efc37461933`.
+
+Реальная проверка пользователем после установки: поведение подтверждено как рабочее.
+
 ### 2026-09-23 — Hold shortcut conflict hardening
 
 После реального теста режима удержания исправлены ложные старты на системных сочетаниях:
@@ -374,14 +572,19 @@ mouse/flagsChanged события в нашем event tap. В результат
 не входили в старую маску событий. В результате системный shortcut проходил корректно,
 но hold-сессия успевала кратко стартовать параллельно.
 
+Основной commit:
+`2f28162923f3ed352e50777cdf077d0e6ef95556`.
+
 ### 2026-09-23 — Hold-to-dictate
 
 Добавлен режим «Удержание — пока зажата» для выбранной левой/правой пары ⌘/⌥.
 Он расширяет существующий listen-only CGEventTap, а не вводит перехватывающий
-механизм. Есть защитные 200 мс от обычных системных аккордов; Esc выбрасывает
-живую запись, release после Esc ничего не делает.
+механизм. В первой реализации использовались защитные 200 мс; после реального тестирования
+порог увеличен до 0,60 с и добавлены отдельные защиты для system shortcuts и menu tracking.
+Esc выбрасывает живую запись, release после Esc ничего не делает.
 
-Основной commit: `Add hold-to-dictate modifier mode`.
+Первоначальный commit:
+`6dd2fb5209848478ac431be0c8b68532258ae3a8`.
 
 ### 2026-09-23 — Left Command / Option
 
