@@ -636,7 +636,7 @@ GitHub Actions:
 Пользователь установил итоговую сборку и подтвердил:
 **«Вроде бы всё работает как надо»**.
 
-### 2026-09-23 — Несколько ASR-моделей: transcribe.cpp + GigaAM + импорт GGUF
+### 2026-09-23 — Подпроект GigaAM-GGUF-TranscribeCpp
 
 Подпроект добавлен поверх `main`
 `ba1e8e57d5deeea893eb04fd0a2d610033111e12` и не переписывает hold-to-dictate,
@@ -819,7 +819,9 @@ Real-model GigaAM gate:
 - `scripts/build-app.sh` — success;
 - `codesign --verify --deep --strict` — success;
 - упаковка и upload Artifact — success;
-- Artifact: `Cribe-macOS-Apple-Silicon` (id `10773881609`).
+- Artifact исходной финальной проверки: `Cribe-macOS-Apple-Silicon` (id `10773881609`).
+
+Именование итоговых сборок этого подпроекта далее: `Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip`.
 
 Итого: интеграция transcribe.cpp + GigaAM + universal GGUF находится в рабочем `main`,
 а реальный GigaAM Q8_0 smoke и финальная .app-сборка подтверждены GitHub Actions.
