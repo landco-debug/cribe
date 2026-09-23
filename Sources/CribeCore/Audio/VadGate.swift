@@ -10,10 +10,23 @@ import Foundation
 public protocol SpeechGating: Sendable {
     /// Обрезает тишину по краям записи. `nil` — речи нет.
     func trimmed(_ samples: [Float]) async throws -> [Float]?
+
+    /// Путь совместимости с Handy для Whisper: НЕ нормализует амплитуду, вырезает длинные
+    /// неречевые интервалы и сохраняет pre-roll/hangover вокруг каждой речевой области.
+    func handyWhisperFiltered(_ samples: [Float]) async throws -> [Float]?
+
     /// Сбрасывает состояние стрима перед новой записью и фиксирует её порог тишины.
     func resetStream(silenceDuration: TimeInterval) async
     /// Скармливает чанк записи. `true` — пора останавливаться по тишине.
     func feedStream(_ chunk: [Float]) async throws -> Bool
+}
+
+public extension SpeechGating {
+    /// Тестовые/альтернативные гейты автоматически получают безопасный fallback.
+    /// Настоящий VadGate переопределяет его Handy-подобным speech-only путём.
+    func handyWhisperFiltered(_ samples: [Float]) async throws -> [Float]? {
+        try await trimmed(samples)
+    }
 }
 
 /// Silero VAD через FluidAudio (CoreML/ANE): настраиваемый автостоп по тишине в стриме
@@ -48,6 +61,60 @@ public actor VadGate: SpeechGating {
         let start = max(0, min(first.startSample(sampleRate: rate), samples.count))
         let end = max(start, min(last.endSample(sampleRate: rate), samples.count))
         let speech = Array(samples[start..<end])
+        guard speech.count >= Self.minSpeechSamples else { return nil }
+        return speech
+    }
+
+    /// Batch-VAD профиль для Whisper, повторяющий ключевые параметры Handy:
+    /// threshold 0.30, ~450 мс pre-roll и ~450 мс post-speech tail, длинная внутренняя
+    /// тишина вырезается. FluidAudio считает VAD крупнее по времени (256 мс чанки), поэтому
+    /// это функциональная, а не побитовая копия Rust/Silero пути Handy.
+    public func handyWhisperFiltered(_ samples: [Float]) async throws -> [Float]? {
+        guard samples.count >= Self.minSpeechSamples else { return nil }
+
+        // negativeThreshold + offset определяют и entry threshold в FluidAudio.
+        // 0.30 + 0.00 => тот же threshold, который Handy задаёт Silero VAD.
+        let config = VadSegmentationConfig(
+            minSpeechDuration: 0.06,
+            minSilenceDuration: 0.45,
+            maxSpeechDuration: .infinity,
+            speechPadding: 0,
+            silenceThresholdForSplit: 0.30,
+            negativeThreshold: 0.30,
+            negativeThresholdOffset: 0,
+            minSilenceAtMaxSpeech: 0.098,
+            useMaxPossibleSilenceAtMaxSpeech: true
+        )
+        let segments = try await vad.segmentSpeech(samples, config: config)
+        guard !segments.isEmpty else { return nil }
+
+        let rate = VadManager.sampleRate
+        let padding = Int(0.45 * Double(rate))
+        var ranges: [(start: Int, end: Int)] = []
+        ranges.reserveCapacity(segments.count)
+
+        for segment in segments {
+            let rawStart = segment.startSample(sampleRate: rate)
+            let rawEnd = segment.endSample(sampleRate: rate)
+            let start = max(0, min(rawStart - padding, samples.count))
+            let end = max(start, min(rawEnd + padding, samples.count))
+            guard end > start else { continue }
+
+            if let last = ranges.indices.last, start <= ranges[last].end {
+                ranges[last].end = max(ranges[last].end, end)
+            } else {
+                ranges.append((start, end))
+            }
+        }
+
+        guard !ranges.isEmpty else { return nil }
+        let capacity = ranges.reduce(0) { $0 + ($1.end - $1.start) }
+        var speech: [Float] = []
+        speech.reserveCapacity(capacity)
+        for range in ranges {
+            speech.append(contentsOf: samples[range.start..<range.end])
+        }
+
         guard speech.count >= Self.minSpeechSamples else { return nil }
         return speech
     }
