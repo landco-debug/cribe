@@ -94,9 +94,10 @@ public enum ModifierHoldAction: Equatable, Sendable {
 /// слушаются .listenOnly в ModifierKeyTap, так что Cmd-C, Cmd-Tab, Option-Left и мышиные
 /// аккорды продолжают доходить до macOS/приложения нетронутыми.
 public struct ModifierHoldDetector {
-    /// Компромисс между «не мигать на обычном Cmd-C» и отзывчивостью push-to-talk.
-    /// Стартовый чайм сообщает, когда удержание принято и можно говорить.
-    public static let activationDelay: TimeInterval = 0.20
+    /// Порог намеренного hold. Он совпадает с upstream-границей holdLimit: до 0,6 с
+    /// нажатие ещё считается частью обычного modifier-жеста, после — отдельным удержанием.
+    /// Это уменьшает ложные старты на системных шорткатах без активного перехвата клавиш.
+    public static let activationDelay: TimeInterval = ModifierTapDetector.holdLimit
 
     private enum State {
         case idle

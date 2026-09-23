@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import CribeCore
@@ -17,8 +18,13 @@ enum ModifierKeyGesture: Sendable {
 
 @MainActor
 final class ModifierKeyTap {
-    /// Клавиатура и мышь: всё, чем можно составить аккорд с ⌘ (⌘-клик, ⌘-скролл, ⌘-drag).
-    /// Само событие нас не интересует — только факт, что оно было.
+    /// NSSystemDefined (raw 14) — именно этим типом AppKit/HID доставляет специальные
+    /// системные клавиши вроде громкости и яркости. В CGEventType у него нет именованного
+    /// case, но event tap этот raw type видит.
+    private static let systemDefinedRawValue = UInt32(NSEvent.EventType.systemDefined.rawValue)
+
+    /// Клавиатура, системные consumer keys и мышь: всё, чем можно составить аккорд с
+    /// модификатором. Само содержимое события нас не интересует — только факт, что оно было.
     private static let eventMask: CGEventMask = {
         let types: [CGEventType] = [
             .flagsChanged,
@@ -27,10 +33,20 @@ final class ModifierKeyTap {
             .rightMouseDown,
             .otherMouseDown,
             .leftMouseDragged,
+            .rightMouseDragged,
+            .otherMouseDragged,
             .scrollWheel,
         ]
-        return types.reduce(into: CGEventMask(0)) { $0 |= CGEventMask(1) << $1.rawValue }
+        var mask = types.reduce(into: CGEventMask(0)) { $0 |= CGEventMask(1) << $1.rawValue }
+        mask |= CGEventMask(1) << systemDefinedRawValue
+        return mask
     }()
+
+    /// Модификаторы, которые делают нажатие нашей ⌘/⌥ частью системного аккорда.
+    /// Caps Lock намеренно не входит: его включённое состояние не должно запрещать диктовку.
+    private static let chordModifierFlags: CGEventFlags = [
+        .maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn,
+    ]
 
     /// Расхождение со `systemUptime`, после которого штамп события считаем недостоверным.
     private static let timestampTolerance: TimeInterval = 5
@@ -53,15 +69,20 @@ final class ModifierKeyTap {
         onGesture: @escaping (ModifierKeyGesture) -> Void
     ) {
         self.behavior = behavior
+        // В upstream blockingFlags содержал только соседний хоткей-модификатор. Для hold
+        // этого мало: если Shift/Ctrl/Fn уже зажаты ДО нашей ⌘/⌥, отдельного flagsChanged
+        // после нажатия нашей клавиши уже не будет. Поэтому на самом press проверяем и
+        // общие CGEventFlags всех остальных семейств модификаторов.
+        let allBlockingFlags = blockingFlags | Self.initialBlockingFlags(for: keyCode)
         self.tapDetector = ModifierTapDetector(
             keyCode: keyCode,
             deviceFlag: deviceFlag,
-            blockingFlags: blockingFlags
+            blockingFlags: allBlockingFlags
         )
         self.holdDetector = ModifierHoldDetector(
             keyCode: keyCode,
             deviceFlag: deviceFlag,
-            blockingFlags: blockingFlags
+            blockingFlags: allBlockingFlags
         )
         self.onGesture = onGesture
     }
@@ -134,6 +155,13 @@ final class ModifierKeyTap {
     }
 
     private func handle(type: CGEventType, event: CGEvent) {
+        // Громкость/яркость/медиа приходят не как keyDown, а как NSSystemDefined. Без этого
+        // Option+Shift+Volume проходит в систему, но Cribe успевает принять Option за hold.
+        if type.rawValue == Self.systemDefinedRawValue {
+            cancelForChordInput()
+            return
+        }
+
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             cancelPendingHoldStart()
@@ -149,16 +177,9 @@ final class ModifierKeyTap {
         // Содержимое чужого ввода не читаем. Для toggle достаточно погасить ожидаемый тап.
         // Для hold pending гасится молча, а уже начавшаяся запись отменяется: человек
         // превратил модификатор в обычный системный аккорд.
-        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel:
-            switch behavior {
-            case .toggle:
-                tapDetector.cancel()
-            case .hold:
-                cancelPendingHoldStart()
-                if holdDetector.cancel() {
-                    fire(.holdCancelled)
-                }
-            }
+        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+             .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel:
+            cancelForChordInput()
 
         case .flagsChanged:
             let eventKeyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -193,16 +214,57 @@ final class ModifierKeyTap {
         }
     }
 
-    /// Реальный старт вынесен из CGEventTap и на 200 мс отложен: это окно, в котором
-    /// обычный Cmd-C/Cmd-Tab/Option-Left успевает заявить себя аккордом и погасить жест.
+    /// Реальный старт вынесен из CGEventTap. Порог тот же 0,6 с, который upstream уже
+    /// использует как границу между «коротким одиночным нажатием» и долгим удержанием.
+    /// Это заметно надёжнее 200 мс для обычных Cmd/Option-сочетаний, где человек часто
+    /// нажимает модификатор чуть раньше основной клавиши.
     private func scheduleHoldStart() {
         cancelPendingHoldStart()
         holdStartTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(
+                for: .milliseconds(Int64(ModifierHoldDetector.activationDelay * 1_000))
+            )
             guard !Task.isCancelled, let self, self.behavior == .hold else { return }
             self.holdStartTask = nil
             guard self.holdDetector.activate(at: ProcessInfo.processInfo.systemUptime) else { return }
             self.onGesture(.holdBegan)
+        }
+    }
+
+    private func cancelForChordInput() {
+        switch behavior {
+        case .toggle:
+            tapDetector.cancel()
+        case .hold:
+            cancelPendingHoldStart()
+            if holdDetector.cancel() {
+                fire(.holdCancelled)
+            }
+        }
+    }
+
+    /// Блокеры, которые уже могут быть зажаты в момент press нашей клавиши.
+    /// Свой generic-флаг разрешён (Command для ⌘, Alternate для ⌥), остальные запрещены.
+    /// Device-бит противоположной клавиши того же семейства добавляется отдельно, потому
+    /// что generic mask не отличает левую ⌘ от правой ⌘ (и так же для ⌥).
+    private static func initialBlockingFlags(for keyCode: Int64) -> UInt64 {
+        var blocked = chordModifierFlags
+
+        switch keyCode {
+        case ModifierTapDetector.leftCommandKeyCode:
+            blocked.remove(.maskCommand)
+            return blocked.rawValue | ModifierTapDetector.rightCommandFlag
+        case ModifierTapDetector.rightCommandKeyCode:
+            blocked.remove(.maskCommand)
+            return blocked.rawValue | ModifierTapDetector.leftCommandFlag
+        case ModifierTapDetector.leftOptionKeyCode:
+            blocked.remove(.maskAlternate)
+            return blocked.rawValue | ModifierTapDetector.rightOptionFlag
+        case ModifierTapDetector.rightOptionKeyCode:
+            blocked.remove(.maskAlternate)
+            return blocked.rawValue | ModifierTapDetector.leftOptionFlag
+        default:
+            return blocked.rawValue
         }
     }
 
