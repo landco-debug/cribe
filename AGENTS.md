@@ -804,8 +804,25 @@ Real-model GigaAM gate:
 - результат совпал с опубликованным acceptance observable семейства GigaAM в
   `transcribe.cpp`.
 
-Финальную `Cribe.app` после merge всё равно проверять штатным
-`Build Cribe.app`: `scripts/build-app.sh` + codesign + Artifact.
+#### Проверка после merge
+
+В `main` подпроект вошёл squash-commit:
+`26a17563f5c0a437b4b1dbd2e98588ba80cb8c71`.
+
+Для этого exact tree успешно прошли:
+
+- CI run `35911842210` — **success**;
+- `swift build` — success;
+- CribeCoreTests — success;
+- CribeAppTests — success;
+- `Build Cribe.app` run `35911842246` — **success**;
+- `scripts/build-app.sh` — success;
+- `codesign --verify --deep --strict` — success;
+- упаковка и upload Artifact — success;
+- Artifact: `Cribe-macOS-Apple-Silicon` (id `10773881609`).
+
+Итого: интеграция transcribe.cpp + GigaAM + universal GGUF находится в рабочем `main`,
+а реальный GigaAM Q8_0 smoke и финальная .app-сборка подтверждены GitHub Actions.
 
 ### 2026-09-23 — Hold menu-tracking stuck-recording fix
 
