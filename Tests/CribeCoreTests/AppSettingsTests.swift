@@ -136,4 +136,19 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).dictationKeyBehavior, .hold)
     }
 
+    /// Обновление существующей установки не меняет ASR само: первым остаётся Parakeet.
+    func testASRModelDefaultsToParakeet() {
+        XCTAssertEqual(AppSettings(defaults: defaults).activeASRModelID, ASRModelID.parakeet)
+    }
+
+    /// Выбранная GigaAM/импортированная модель должна пережить перезапуск приложения.
+    func testASRModelSelectionPersists() {
+        let first = AppSettings(defaults: defaults)
+        first.activeASRModelID = ASRModelID.gigaAME2ERNNTQ8
+        XCTAssertEqual(
+            AppSettings(defaults: defaults).activeASRModelID,
+            ASRModelID.gigaAME2ERNNTQ8
+        )
+    }
+
 }
