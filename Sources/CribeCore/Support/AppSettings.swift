@@ -18,6 +18,17 @@ public enum HotkeyMode: String, Codable, CaseIterable, Sendable {
     case custom
 }
 
+/// Как модификатор управляет живой записью.
+///
+/// toggle сохраняет штатную механику Cribe: чистый короткий тап запускает/останавливает.
+/// hold — push-to-talk: запись начинается после короткого защитного удержания и
+/// заканчивается отпусканием. Режим относится к левой/правой паре ⌘/⌥; пользовательские
+/// шорткаты KeyboardShortcuts остаются обычными переключателями.
+public enum DictationKeyBehavior: String, Codable, CaseIterable, Sendable {
+    case toggle
+    case hold
+}
+
 /// Настройки приложения поверх UserDefaults. Каждое поле пишется на диск при изменении,
 /// UI подписан через `@Published`.
 public final class AppSettings: ObservableObject {
@@ -45,6 +56,7 @@ public final class AppSettings: ObservableObject {
         static let soundsEnabled = "soundsEnabled"
         static let autoStopEnabled = "autoStopEnabled"
         static let dictationHotkeyMode = "dictationHotkeyMode"
+        static let dictationKeyBehavior = "dictationKeyBehavior"
         static let mixesUkrainian = "mixesUkrainian"
         static let pillStyle = "pillStyle"
         /// Прежний ключ той же галочки: с него читается значение при первом запуске новой
@@ -150,6 +162,13 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(dictationHotkeyMode.rawValue, forKey: Key.dictationHotkeyMode) }
     }
 
+    /// Нажать для старта/стопа или держать модификатор только на время речи.
+    /// По умолчанию toggle, чтобы обновление не меняло привычное поведение существующих
+    /// установок без явного выбора человека.
+    @Published public var dictationKeyBehavior: DictationKeyBehavior {
+        didSet { defaults.set(dictationKeyBehavior.rawValue, forKey: Key.dictationKeyBehavior) }
+    }
+
     /// UID выбранного микрофона; nil — системный по умолчанию (nil стирает ключ).
     @Published public var inputDeviceUID: String? {
         didSet { defaults.set(inputDeviceUID, forKey: Key.inputDeviceUID) }
@@ -209,6 +228,8 @@ public final class AppSettings: ObservableObject {
         keptRecordings = defaults.object(forKey: Key.keptRecordings) as? Int ?? 3
         dictationHotkeyMode = defaults.string(forKey: Key.dictationHotkeyMode)
             .flatMap(HotkeyMode.init(rawValue:)) ?? .rightCommand
+        dictationKeyBehavior = defaults.string(forKey: Key.dictationKeyBehavior)
+            .flatMap(DictationKeyBehavior.init(rawValue:)) ?? .toggle
         inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
     }
 }
