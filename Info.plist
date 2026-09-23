@@ -26,15 +26,11 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cribe использует микрофон для записи вашей речи и её распознавания на этом компьютере.</string>
+	<!-- Fork build: upstream Sparkle updates are intentionally disabled.
+	     Keeping the original feed would allow an official Cribe update to replace this fork. -->
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
 	<key>SUEnableSystemProfiling</key>
 	<false/>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/pnazarovich/cribe/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>Lkmv193uXVcWRpbvpjn0LtsLSDdT9/GC4+r+aZhK/eA=</string>
-	<key>SUScheduledCheckInterval</key>
-	<integer>86400</integer>
 </dict>
 </plist>

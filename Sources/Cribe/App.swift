@@ -135,9 +135,8 @@ final class AppCore: ObservableObject {
     /// Панель и глобальные хоткеи поднимаются после старта NSApplication.
     func start() {
         guard panel == nil else { return }
-        // Расписание проверок обновлений заводится здесь же: до старта NSApplication
-        // показывать найденное обновление было бы нечем.
-        UpdateController.shared.start()
+        // В форке обновления из официального канала намеренно отключены:
+        // иначе Sparkle мог бы заменить эту сборку оригинальным Cribe без наших изменений.
         warmUpModel()
         panel = LivePanel(controller: controller, settings: settings)
         // Записка рядом с панелью: пилюля показывает одно дело, а с наложением их бывает
@@ -455,8 +454,7 @@ private struct MenuBarScene: Scene {
                 menu: core.menu,
                 settings: core.settings,
                 history: core.history,
-                learner: core.learner,
-                updates: UpdateController.shared
+                learner: core.learner
             )
         } label: {
             CrabGlyph(recording: isRecording, height: CrabGlyph.menuBarHeight)

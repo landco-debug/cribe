@@ -24,7 +24,6 @@ struct MenuBarView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var history: HistoryStore
     @ObservedObject var learner: EditLearner
-    @ObservedObject var updates: UpdateController
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -33,15 +32,6 @@ struct MenuBarView: View {
     private static let historyTitleLimit = 48
 
     var body: some View {
-        // Плановая проверка нашла новую версию. Само по себе окно Sparkle фоновому
-        // приложению открылось бы позади чужих — поэтому оно ждёт этой строки, и щелчок
-        // по ней открывает его уже поверх всего (см. `UpdateController`).
-        if let version = updates.pendingVersion {
-            Button("Обновление \(version) — установить…") { updates.checkForUpdates() }
-
-            Divider()
-        }
-
         Text(menu.status)
 
         Divider()
@@ -116,19 +106,6 @@ struct MenuBarView: View {
         Button("Настройки…") {
             WindowPresenter.shared.present { openSettings() }
         }
-
-        // Обновления остаются наверху, хотя нажимают их редко. Причина не в частоте: строка
-        // «Обновление найдено» приходит сама и живёт ровно здесь же (см. верх меню), и если
-        // ручная проверка спрятана в подменю, то две половины одного дела оказываются
-        // на разной глубине — а человек, которому «кажется, что-то давно не обновлялось»,
-        // ищет её именно тут.
-        //
-        // Окно Sparkle поднимает сама: проверку начал человек, и фоновое приложение она
-        // в этом случае активирует. Пункт гаснет, пока предыдущая проверка не закончилась.
-        Button(updates.canCheck ? "Проверить обновления…" : "Проверяю обновления…") {
-            updates.checkForUpdates()
-        }
-        .disabled(!updates.canCheck)
 
         // Всё, что делают в первый день и потом почти никогда.
         Menu("Ещё") {
