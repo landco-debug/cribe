@@ -1010,7 +1010,7 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(text, "Тест.")
         XCTAssertEqual(vad.handyCalls, 1)
         XCTAssertEqual(vad.standardCalls, 0)
-        XCTAssertEqual(engine.seenSamples?.first, 0.02, accuracy: 0.000_001)
+        XCTAssertEqual(engine.seenSamples?.first ?? -1, 0.02, accuracy: 0.000_001)
     }
 
     func testStandardProfileKeepsHistoricalNormalizationAndTrimPath() async throws {
@@ -1026,7 +1026,7 @@ final class DictationControllerTests: XCTestCase {
 
         XCTAssertEqual(vad.standardCalls, 1)
         XCTAssertEqual(vad.handyCalls, 0)
-        XCTAssertEqual(engine.seenSamples?.first, 0.4, accuracy: 0.000_1)
+        XCTAssertEqual(engine.seenSamples?.first ?? -1, 0.4, accuracy: 0.000_1)
     }
 
     // MARK: - Бегущая строка
