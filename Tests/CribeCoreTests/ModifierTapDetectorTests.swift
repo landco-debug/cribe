@@ -189,7 +189,7 @@ final class ModifierHoldDetectorTests: XCTestCase {
         XCTAssertFalse(detector.activate(at: 1))
     }
 
-    /// Cmd-C/клик/скролл до 200 мс гасят pending жест без старта записи.
+    /// Cmd-C/клик/скролл до защитного порога гасят pending жест без старта записи.
     func testInputBeforeActivationCancelsPendingHoldSilently() {
         var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
 
@@ -205,7 +205,7 @@ final class ModifierHoldDetectorTests: XCTestCase {
         var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
 
         XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0), .arm)
-        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay))
+        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay + 0.001))
         XCTAssertTrue(detector.cancel())
         XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 1), .none)
     }
@@ -214,12 +214,33 @@ final class ModifierHoldDetectorTests: XCTestCase {
         var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
 
         _ = detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0)
-        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay))
+        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay + 0.001))
         XCTAssertEqual(
-            detector.flagsChanged(keyCode: 56, flags: lcmdDown | 0x2, at: 0.3),
+            detector.flagsChanged(keyCode: 56, flags: lcmdDown | 0x2, at: 0.7),
             .cancel
         )
         XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 0.4), .none)
+    }
+
+    /// Уже зажатый внешний модификатор (например Shift перед Option) обязан блокировать
+    /// hold прямо на первом событии нашей клавиши: второго flagsChanged может уже не быть.
+    func testAlreadyHeldBlockingFlagPreventsArming() {
+        let simulatedShiftFlag: UInt64 = 1 << 17
+        var detector = ModifierHoldDetector(
+            keyCode: lcmd,
+            deviceFlag: lcmdDown,
+            blockingFlags: simulatedShiftFlag
+        )
+
+        XCTAssertEqual(
+            detector.flagsChanged(
+                keyCode: lcmd,
+                flags: lcmdDown | simulatedShiftFlag,
+                at: 0
+            ),
+            .none
+        )
+        XCTAssertFalse(detector.activate(at: 2))
     }
 
     func testHeldNeighborBlocksHoldFromArming() {
