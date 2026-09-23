@@ -1,13 +1,15 @@
 import Foundation
 
-/// Модели Whisper, оставшиеся от прежних версий.
+/// Остатки старого WhisperKit/ModelStore в общей папке моделей.
 ///
-/// Распознавание держит одна модель — Parakeet, — и веса Whisper на диске больше никому
-/// не нужны. Молча их удалить нельзя: это полтора-три гигабайта чужих файлов, и решение
-/// об удалении принимает человек. Молча оставить — тоже: он о них не знает и никогда
-/// не найдёт папку сам.
+/// Исторически весь `~/Library/Application Support/Cribe/models` принадлежал старым
+/// Whisper-весам, поэтому прежняя реализация считала и удаляла папку целиком. После
+/// появления GigaAM и импортируемых GGUF/BIN этот каталог стал общим: удалять его целиком
+/// больше нельзя.
 ///
-/// Раскладка досталась от `ModelStore`: `~/Library/Application Support/Cribe/models`.
+/// Текущие управляемые файлы Cribe защищены явным safelist. Всё остальное на верхнем
+/// уровне считается legacy-кандидатом. Это сохраняет старую возможность освободить место,
+/// но никогда не трогает активные GigaAM/импортированные модели.
 public struct LegacyWhisperCache: Sendable {
     public static let shared = LegacyWhisperCache(base: defaultBase)
 
@@ -22,35 +24,79 @@ public struct LegacyWhisperCache: Sendable {
         self.base = base
     }
 
-    /// Сколько занимают старые веса. Ноль — удалять нечего и спрашивать не о чем.
-    ///
-    /// Считаем по файлам внутри: `.mlmodelc` — сама по себе папка, и её размер знают
-    /// только файлы в ней.
+    /// Сколько занимают ТОЛЬКО legacy-кандидаты.
     public func bytesOnDisk() -> Int64 {
-        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey]
-        guard let files = FileManager.default.enumerator(
-            at: base,
-            includingPropertiesForKeys: keys
-        ) else {
-            return 0
-        }
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .totalFileAllocatedSizeKey,
+            .fileSizeKey,
+        ]
 
         var total: Int64 = 0
-        for case let url as URL in files {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)),
-                  values.isRegularFile == true else { continue }
-            total += Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
+        for root in legacyTopLevelEntries() {
+            if let values = try? root.resourceValues(forKeys: keys),
+               values.isRegularFile == true {
+                total += Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
+                continue
+            }
+
+            guard let files = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: Array(keys)
+            ) else { continue }
+
+            for case let url as URL in files {
+                guard let values = try? url.resourceValues(forKeys: keys),
+                      values.isRegularFile == true else { continue }
+                total += Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
+            }
         }
         return total
     }
 
     public func exists() -> Bool {
-        FileManager.default.fileExists(atPath: base.path)
+        !legacyTopLevelEntries().isEmpty
     }
 
-    /// Удаляет папку целиком. Отсутствующая папка — не ошибка: чистить нечего.
+    /// Удаляет только legacy-кандидаты, сохраняя текущий registry и все современные модели.
     public func remove() throws {
-        guard exists() else { return }
-        try FileManager.default.removeItem(at: base)
+        for url in legacyTopLevelEntries() {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func legacyTopLevelEntries() -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return entries.filter { !Self.isCurrentManagedEntry($0) }
+    }
+
+    private static func isCurrentManagedEntry(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+
+        // ModelInstall: imported models + manifest.
+        if name == "imported" || name == "registry.json" {
+            return true
+        }
+
+        // Встроенная GigaAM и её временный staging во время загрузки.
+        if name == "gigaam-v3-e2e-rnnt-Q8_0.gguf" || name.hasPrefix(".gigaam-download-") {
+            return true
+        }
+
+        // Безопасность на будущее/ручные файлы: современный ASR-файл верхнего уровня
+        // нельзя объявлять «старым мусором» только потому, что его ещё не знает этот код.
+        if ext == "gguf" || ext == "bin" {
+            return true
+        }
+
+        return false
     }
 }
