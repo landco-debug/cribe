@@ -207,9 +207,7 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
                 loading = nil
             }
             Self.logger.notice(
-                "ASR-модель готова: \(self.modelURL.lastPathComponent, privacy: .public), "
-                    + "\(loaded.arch, privacy: .public) / \(loaded.variant, privacy: .public), "
-                    + "backend=\(loaded.backend, privacy: .public)"
+                "ASR-модель готова: \(self.modelURL.lastPathComponent, privacy: .public), \(loaded.arch, privacy: .public) / \(loaded.variant, privacy: .public), backend=\(loaded.backend, privacy: .public)"
             )
             return loaded
         } catch {
