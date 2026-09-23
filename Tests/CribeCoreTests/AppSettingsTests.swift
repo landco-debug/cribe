@@ -27,6 +27,28 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(AppSettings(defaults: defaults).autoStopEnabled)
     }
 
+    /// Старый двухсекундный порог остаётся дефолтом, но теперь это сохранённая настройка.
+    func testAutoStopSilenceDurationDefaultsAndPersists() {
+        XCTAssertEqual(AppSettings(defaults: defaults).autoStopSilenceSeconds, 2.0)
+
+        AppSettings(defaults: defaults).autoStopSilenceSeconds = 3.5
+        XCTAssertEqual(AppSettings(defaults: defaults).autoStopSilenceSeconds, 3.5)
+    }
+
+    /// Страховочный потолок не включаем обновлением молча: длинные привычные диктовки
+    /// нельзя внезапно обрезать. Само значение по умолчанию — одна минута.
+    func testRecordingLimitDefaultsOffAndPersists() {
+        let first = AppSettings(defaults: defaults)
+        XCTAssertFalse(first.recordingLimitEnabled)
+        XCTAssertEqual(first.recordingLimitSeconds, 60.0)
+
+        first.recordingLimitEnabled = true
+        first.recordingLimitSeconds = 45
+        let second = AppSettings(defaults: defaults)
+        XCTAssertTrue(second.recordingLimitEnabled)
+        XCTAssertEqual(second.recordingLimitSeconds, 45.0)
+    }
+
     /// Учёба на правках включена по умолчанию: без неё словарь пополняется только руками,
     /// а выключить её человек может и в онбординге, и в настройках.
     func testLearningFromEditsIsOnByDefault() {
