@@ -116,30 +116,34 @@ public enum DictationError: LocalizedError, Sendable {
 /// из разных задач. Актор реентерабелен (на `await` он освобождается), поэтому вызовы
 /// выстроены в цепочку задач — как в `VadGate.feedStream`.
 actor EngineGate {
-    private let engine: TranscriptionEngine
     /// Хвост цепочки: только «дождаться предыдущего», без его результата.
+    ///
+    /// Гейт общий для всех движков: при смене модели уже записанная диктовка продолжает
+    /// ехать на своём engine, но тяжёлые проходы всё равно не запускаются параллельно.
     private var inFlight: Task<Void, Never>?
 
-    init(_ engine: TranscriptionEngine) {
-        self.engine = engine
-    }
-
-    /// Загрузка модели идёт мимо цепочки: она не трогает уже прогретый инстанс,
-    /// а движок сам склеивает параллельные `prepare`.
-    func prepare(language: Language, onState: @escaping @Sendable (ASRModelState) -> Void) async throws {
+    /// Загрузка модели идёт мимо цепочки: конкретный engine сам склеивает параллельные
+    /// `prepare`. Движок передаётся явно, потому что разные DictationSession могут уже
+    /// принадлежать разным моделям после переключения в настройках.
+    func prepare(
+        _ engine: TranscriptionEngine,
+        language: Language,
+        onState: @escaping @Sendable (ASRModelState) -> Void
+    ) async throws {
         try await engine.prepare(language: language, onState: onState)
     }
 
-    /// Проход распознавания. Сериализован: модель одна, и лезть в неё двумя задачами сразу
-    /// нельзя — при наложении диктовок это происходило бы постоянно.
+    /// Проход распознавания сериализован между всеми движками. Это сохраняет прежнее
+    /// правило Cribe «одна тяжёлая ASR-работа за раз» и не перегружает базовый Mac.
     func transcribe(
+        _ engine: TranscriptionEngine,
         _ samples: [Float],
         language: Language,
         prompt: String,
         translating: Bool = false
     ) async throws -> String {
         let previous = inFlight
-        let task = Task { [self] in
+        let task = Task {
             _ = await previous?.value
             return try await engine.transcribe(
                 samples, language: language, prompt: prompt, translating: translating
@@ -208,6 +212,9 @@ private final class DictationSession {
 
     // MARK: Снято на старте — дальше не меняется
 
+    /// Движок фиксируется вместе с языком. Если пользователь сменил модель, пока эта
+    /// диктовка стоит в очереди, уже сказанная речь не «переедет» на новый backend.
+    let engine: TranscriptionEngine
     let language: Language
     /// Перевод, назначенный хоткеем (правый ⌥); nil — решает настройка.
     let translating: Bool?
@@ -230,7 +237,8 @@ private final class DictationSession {
     /// стоит в очереди, микрофон успевает записать следующую и ответил бы уже про неё.
     var capturedSilence = false
 
-    init(language: Language, translating: Bool?) {
+    init(engine: TranscriptionEngine, language: Language, translating: Bool?) {
+        self.engine = engine
         self.language = language
         self.translating = translating
     }
@@ -328,7 +336,8 @@ public final class DictationController: ObservableObject {
     /// переписывает и её, иначе история осталась бы с нечищеным текстом навсегда.
     private var retryHistoryID: UUID?
 
-    private let gate: EngineGate
+    private let gate = EngineGate()
+    private let engineProvider: @MainActor () -> TranscriptionEngine
     private let dictionary: UserDictionary
     private let settings: AppSettings
     private let history: HistoryStore
@@ -391,8 +400,32 @@ public final class DictationController: ObservableObject {
     private var micReleaseTask: Task<Void, Never>?
     private var deviceSubscription: AnyCancellable?
 
-    public init(
+    /// Старый вход оставлен для тестов, CLI и внешних клиентов: один фиксированный engine
+    /// просто превращается в provider, поэтому существующие вызовы не меняются.
+    public convenience init(
         engine: TranscriptionEngine,
+        dictionary: UserDictionary,
+        settings: AppSettings,
+        recorder: AudioCapturing = CaptureRecorder(),
+        delivery: TextDelivery = .system,
+        makeVad: @escaping @Sendable () async throws -> SpeechGating = { try await VadGate() },
+        recordings: RecordingStore = .shared
+    ) {
+        self.init(
+            engineProvider: { engine },
+            dictionary: dictionary,
+            settings: settings,
+            recorder: recorder,
+            delivery: delivery,
+            makeVad: makeVad,
+            recordings: recordings
+        )
+    }
+
+    /// Приложение использует provider: он возвращает активную модель ровно в момент старта
+    /// диктовки. Сама DictationSession затем держит этот engine до конца своей очереди.
+    public init(
+        engineProvider: @escaping @MainActor () -> TranscriptionEngine,
         dictionary: UserDictionary,
         settings: AppSettings,
         recorder: AudioCapturing = CaptureRecorder(),
@@ -406,7 +439,7 @@ public final class DictationController: ObservableObject {
         // пользователя рядом с прогоном — не то, что тесты вправе делать.
         recordings: RecordingStore = .shared
     ) {
-        self.gate = EngineGate(engine)
+        self.engineProvider = engineProvider
         self.dictionary = dictionary
         self.settings = settings
         self.history = .shared
@@ -521,7 +554,8 @@ public final class DictationController: ObservableObject {
             publish()
         }
 
-        try await gate.prepare(language: language) { [weak self] modelState in
+        let engine = engineProvider()
+        try await gate.prepare(engine, language: language) { [weak self] modelState in
             Task { @MainActor in self?.apply(modelState) }
         }
         let vad = try await ensureVad()
@@ -532,6 +566,7 @@ public final class DictationController: ObservableObject {
         processingState = .transcribing
         publish()
         let raw = try await gate.transcribe(
+            engine,
             speech,
             language: language,
             prompt: ""
@@ -583,13 +618,17 @@ public final class DictationController: ObservableObject {
         micReleaseTask = nil
         prewarmGPT()
 
-        let session = DictationSession(language: settings.language, translating: translating)
+        let session = DictationSession(
+            engine: engineProvider(),
+            language: settings.language,
+            translating: translating
+        )
         recording = session
         publish()
         Task {
             defer { isStarting = false }
             do {
-                try await gate.prepare(language: session.language) { [weak self] modelState in
+                try await gate.prepare(session.engine, language: session.language) { [weak self] modelState in
                     Task { @MainActor in self?.apply(modelState) }
                 }
                 // Пока грузилась модель, хоткей нажали второй раз — сессия отменена.
@@ -677,7 +716,7 @@ public final class DictationController: ObservableObject {
 
         startVadLoop(stream: stream, vad: vad)
         startRecordingLimit(for: session)
-        startLivePreview(language: session.language)
+        startLivePreview(session)
         offerParallelHintIfDue()
     }
 
@@ -750,7 +789,7 @@ public final class DictationController: ObservableObject {
     /// инстанс модели один. Отсюда же плата — стоп, пойманный ровно в момент идущего
     /// предпросмотра, ждёт его конца (доли секунды). Ради этого предпросмотр не запускается,
     /// когда очередь обработки не пуста: там чужой, уже сказанный текст, и он важнее.
-    private func startLivePreview(language: Language) {
+    private func startLivePreview(_ session: DictationSession) {
         // Новая запись — новая строка и новый пик: остаток прошлой диктовки в капсуле был бы
         // враньём, а её пик занижал бы усиление этой.
         livePreview = LiveTranscript()
@@ -768,7 +807,10 @@ public final class DictationController: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 guard let tail = self.livePreviewTail() else { continue }
                 guard let text = try? await self.gate.transcribe(
-                    tail, language: language, prompt: ""
+                    session.engine,
+                    tail,
+                    language: session.language,
+                    prompt: ""
                 ) else { continue }
                 guard !Task.isCancelled else { return }
                 self.showLive(text)
@@ -1031,7 +1073,10 @@ public final class DictationController: ObservableObject {
                 throw DictationError.noSpeech
             }
             let raw = try await gate.transcribe(
-                speech, language: language, prompt: session.prompt
+                session.engine,
+                speech,
+                language: language,
+                prompt: session.prompt
             )
             var text = ReplacementEngine.apply(raw, entries: entries)
             var degradations: [String] = []
@@ -1661,13 +1706,15 @@ public final class DictationController: ObservableObject {
             scheduleIdle(after: Self.insertedLinger)
         }
 
-        try await gate.prepare(language: language) { [weak self] modelState in
+        let engine = engineProvider()
+        try await gate.prepare(engine, language: language) { [weak self] modelState in
             Task { @MainActor in self?.apply(modelState) }
         }
         // Ворота речи не зовём вовсе: на повторе честнее отдать модели всё, включая тишину,
         // чем во второй раз недосчитаться. Уровень поднимаем — это ровно то, чего тихой
         // записи не хватало в первый раз.
         let raw = try await gate.transcribe(
+            engine,
             AudioNormalizer.normalized(samples),
             language: language,
             prompt: ""
