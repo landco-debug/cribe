@@ -51,6 +51,8 @@ cd "$(dirname "$0")/.."
 source "scripts/entitlements.sh"
 # shellcheck source=sparkle.sh
 source "scripts/sparkle.sh"
+# shellcheck source=transcribe-runtime.sh
+source "scripts/transcribe-runtime.sh"
 
 fail() { printf 'ОШИБКА: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
@@ -196,6 +198,8 @@ done < <(find "$APP/Contents" -maxdepth 2 -name '*.bundle')
 # быть подписаны нашей: без этого приложение не запустится. Внутри фреймворка своя
 # вложенная программа — подписывается изнутри наружу (см. scripts/sparkle.sh).
 sign_sparkle "$APP" "$DEVELOPER_ID" "$TIMESTAMP_FLAG"
+# CTranscribe после ad-hoc build переподписывается тем же Developer ID.
+sign_transcribe "$APP" "$DEVELOPER_ID" "$TIMESTAMP_FLAG"
 
 ENTITLEMENTS=$(prepare_entitlements Release.entitlements "$APP" "$DEVELOPER_ID")
 codesign --force --options runtime "$TIMESTAMP_FLAG" \
@@ -203,6 +207,7 @@ codesign --force --options runtime "$TIMESTAMP_FLAG" \
 
 step "Проверка подписи"
 codesign --verify --deep --strict --verbose=2 "$APP"
+bash scripts/verify-app-runtime.sh "$APP"
 # До нотаризации Gatekeeper приложение отвергает — это ожидаемо, поэтому здесь мягко.
 spctl -a -vvv -t install "$APP" || echo "(ожидаемо: Gatekeeper пропустит только после нотаризации)"
 
