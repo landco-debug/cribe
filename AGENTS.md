@@ -833,7 +833,7 @@ GigaAM v3 обучена для сравнительно коротких uttera
   — новый explicit-engine contract.
 - `Tests/CribeAppTests/ModelInstallTests.swift`
   — built-ins, fallback при пропавшей модели, invalid import не попадает в registry.
-- `.github/workflows/gigaam-smoke.yml`
+- `.github/workflows/asr-real-model-smoke.yml`
   — отдельный real-model acceptance gate, чтобы обычный CI не скачивал ~261 MiB каждый раз.
 
 #### Проверка до merge
