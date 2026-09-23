@@ -60,7 +60,7 @@ let package = Package(
         // (вытеснение, освобождение окна) проверяется только здесь.
         .testTarget(
             name: "CribeAppTests",
-            dependencies: ["Cribe"]
+            dependencies: ["Cribe", "CribeCore"]
         ),
     ]
 )

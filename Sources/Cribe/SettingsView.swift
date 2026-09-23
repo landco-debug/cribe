@@ -886,6 +886,11 @@ private struct AboutPane: View {
             URL(string: "https://github.com/FluidInference/FluidAudio")!
         ),
         (
+            "transcribe.cpp",
+            "GGUF-модели распознавания через ggml / Metal",
+            URL(string: "https://github.com/handy-computer/transcribe.cpp")!
+        ),
+        (
             "KeyboardShortcuts",
             "глобальные сочетания клавиш",
             URL(string: "https://github.com/sindresorhus/KeyboardShortcuts")!
