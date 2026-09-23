@@ -50,9 +50,13 @@ final class ModifierKeyTap {
         let types: [CGEventType] = [
             .flagsChanged,
             .keyDown,
+            .keyUp,
             .leftMouseDown,
+            .leftMouseUp,
             .rightMouseDown,
+            .rightMouseUp,
             .otherMouseDown,
+            .otherMouseUp,
             .leftMouseDragged,
             .rightMouseDragged,
             .otherMouseDragged,
@@ -78,9 +82,13 @@ final class ModifierKeyTap {
     /// частью аккорда и hold-сессия должна быть отменена.
     private struct InputCounters: Equatable {
         let keyDown: UInt32
+        let keyUp: UInt32
         let leftMouseDown: UInt32
+        let leftMouseUp: UInt32
         let rightMouseDown: UInt32
+        let rightMouseUp: UInt32
         let otherMouseDown: UInt32
+        let otherMouseUp: UInt32
         let leftMouseDragged: UInt32
         let rightMouseDragged: UInt32
         let otherMouseDragged: UInt32
@@ -90,9 +98,13 @@ final class ModifierKeyTap {
             let state: CGEventSourceStateID = .combinedSessionState
             return Self(
                 keyDown: CGEventSource.counterForEventType(state, eventType: .keyDown),
+                keyUp: CGEventSource.counterForEventType(state, eventType: .keyUp),
                 leftMouseDown: CGEventSource.counterForEventType(state, eventType: .leftMouseDown),
+                leftMouseUp: CGEventSource.counterForEventType(state, eventType: .leftMouseUp),
                 rightMouseDown: CGEventSource.counterForEventType(state, eventType: .rightMouseDown),
+                rightMouseUp: CGEventSource.counterForEventType(state, eventType: .rightMouseUp),
                 otherMouseDown: CGEventSource.counterForEventType(state, eventType: .otherMouseDown),
+                otherMouseUp: CGEventSource.counterForEventType(state, eventType: .otherMouseUp),
                 leftMouseDragged: CGEventSource.counterForEventType(state, eventType: .leftMouseDragged),
                 rightMouseDragged: CGEventSource.counterForEventType(state, eventType: .rightMouseDragged),
                 otherMouseDragged: CGEventSource.counterForEventType(state, eventType: .otherMouseDragged),
@@ -241,7 +253,10 @@ final class ModifierKeyTap {
         // Содержимое чужого ввода не читаем. Для toggle достаточно погасить ожидаемый тап.
         // Для hold pending гасится молча, а уже начавшаяся запись отменяется: человек
         // превратил модификатор в обычный системный аккорд.
-        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        case .keyDown, .keyUp,
+             .leftMouseDown, .leftMouseUp,
+             .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp,
              .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel:
             cancelForChordInput()
 
