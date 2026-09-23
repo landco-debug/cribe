@@ -154,7 +154,7 @@ private struct FailingVad: SpeechGating {
         return nil
     }
 
-    func resetStream() async {}
+    func resetStream(silenceDuration: TimeInterval) async {}
     func feedStream(_ chunk: [Float]) async throws -> Bool { false }
 }
 
