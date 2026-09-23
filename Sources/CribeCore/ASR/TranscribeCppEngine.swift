@@ -52,7 +52,7 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
     /// В самом vendored ggml предусмотрен этот официальный escape hatch. Он отключает
     /// только residency-set keep-alive, а НЕ Metal backend/GPU.
     private static let configureGGMLMetalOnce: Void = {
-        setenv("GGML_METAL_NO_RESIDENCY", "1", 1)
+        _ = setenv("GGML_METAL_NO_RESIDENCY", "1", 1)
     }()
 
     private static func configureRuntime() {
