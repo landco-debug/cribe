@@ -144,6 +144,13 @@ private struct GeneralPane: View {
                     Text("Свой шорткат").tag(HotkeyMode.custom)
                 }
 
+                if settings.dictationHotkeyMode != .custom {
+                    Picker("Режим кнопки:", selection: $settings.dictationKeyBehavior) {
+                        Text("Нажатие — старт / стоп").tag(DictationKeyBehavior.toggle)
+                        Text("Удержание — пока зажата").tag(DictationKeyBehavior.hold)
+                    }
+                }
+
                 switch settings.dictationHotkeyMode {
                 case .rightCommand, .leftCommand:
                     EmptyView()
@@ -158,23 +165,41 @@ private struct GeneralPane: View {
             } footer: {
                 switch settings.dictationHotkeyMode {
                 case .rightCommand:
-                    caption(
-                        accessibilityGranted
-                            ? "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
-                                + "Esc отменяет запись."
-                            : "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
-                                + "Нужно разрешение Accessibility."
-                    )
+                    if settings.dictationKeyBehavior == .hold {
+                        caption(
+                            "Удерживайте правый ⌘ — запись идёт до отпускания; после отпускания "
+                                + "начинается распознавание. Правый ⌥ — то же с переводом на "
+                                + "\(settings.translationTarget.afterOn). Esc во время удержания отменяет запись."
+                                + (accessibilityGranted ? "" : " Нужно разрешение Accessibility.")
+                        )
+                    } else {
+                        caption(
+                            accessibilityGranted
+                                ? "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                    + "Esc отменяет запись."
+                                : "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                    + "Нужно разрешение Accessibility."
+                        )
+                    }
                 case .leftCommand:
-                    caption(
-                        accessibilityGranted
-                            ? "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
-                                + "Esc отменяет запись."
-                            : "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
-                                + "Нужно разрешение Accessibility."
-                    )
+                    if settings.dictationKeyBehavior == .hold {
+                        caption(
+                            "Удерживайте левый ⌘ — запись идёт до отпускания; после отпускания "
+                                + "начинается распознавание. Левый ⌥ — то же с переводом на "
+                                + "\(settings.translationTarget.afterOn). Esc во время удержания отменяет запись."
+                                + (accessibilityGranted ? "" : " Нужно разрешение Accessibility.")
+                        )
+                    } else {
+                        caption(
+                            accessibilityGranted
+                                ? "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                    + "Esc отменяет запись."
+                                : "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                    + "Нужно разрешение Accessibility."
+                        )
+                    }
                 case .custom:
-                    caption("Esc отменяет запись в любом режиме.")
+                    caption("Свой шорткат работает по нажатию. Esc отменяет запись.")
                 }
             }
 
