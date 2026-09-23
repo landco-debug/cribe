@@ -160,3 +160,83 @@ final class ModifierTapDetectorTests: XCTestCase {
     }
 
 }
+
+
+final class ModifierHoldDetectorTests: XCTestCase {
+    private let lcmd = ModifierTapDetector.leftCommandKeyCode
+    private let lcmdDown = ModifierTapDetector.leftCommandFlag
+    private let released: UInt64 = 0
+
+    func testCleanHoldArmsThenFinishesAfterActivationDelay() {
+        var detector = ModifierHoldDetector(
+            keyCode: lcmd,
+            deviceFlag: lcmdDown,
+            blockingFlags: ModifierTapDetector.leftOptionFlag
+        )
+
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 1), .arm)
+        XCTAssertFalse(detector.activate(at: 1 + ModifierHoldDetector.activationDelay - 0.01))
+        XCTAssertTrue(detector.activate(at: 1 + ModifierHoldDetector.activationDelay))
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 2), .finish)
+    }
+
+    /// Быстрый tap в режиме удержания — не альтернативный toggle: записи быть не должно.
+    func testQuickPressReleaseNeverActivates() {
+        var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
+
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0), .arm)
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 0.05), .none)
+        XCTAssertFalse(detector.activate(at: 1))
+    }
+
+    /// Cmd-C/клик/скролл до 200 мс гасят pending жест без старта записи.
+    func testInputBeforeActivationCancelsPendingHoldSilently() {
+        var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
+
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0), .arm)
+        XCTAssertFalse(detector.cancel())
+        XCTAssertFalse(detector.activate(at: 1))
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 1.1), .none)
+    }
+
+    /// Если аккорд начался уже после стартового чайма, живую запись выбрасываем,
+    /// а отпускание модификатора потом ничего не запускает и не обрабатывает.
+    func testInputAfterActivationCancelsActiveHoldAndReleaseIsNoOp() {
+        var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
+
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0), .arm)
+        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay))
+        XCTAssertTrue(detector.cancel())
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 1), .none)
+    }
+
+    func testOtherModifierAfterActivationReturnsCancel() {
+        var detector = ModifierHoldDetector(keyCode: lcmd, deviceFlag: lcmdDown)
+
+        _ = detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0)
+        XCTAssertTrue(detector.activate(at: ModifierHoldDetector.activationDelay))
+        XCTAssertEqual(
+            detector.flagsChanged(keyCode: 56, flags: lcmdDown | 0x2, at: 0.3),
+            .cancel
+        )
+        XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 0.4), .none)
+    }
+
+    func testHeldNeighborBlocksHoldFromArming() {
+        var detector = ModifierHoldDetector(
+            keyCode: ModifierTapDetector.leftOptionKeyCode,
+            deviceFlag: ModifierTapDetector.leftOptionFlag,
+            blockingFlags: ModifierTapDetector.leftCommandFlag
+        )
+
+        XCTAssertEqual(
+            detector.flagsChanged(
+                keyCode: ModifierTapDetector.leftOptionKeyCode,
+                flags: ModifierTapDetector.leftCommandFlag | ModifierTapDetector.leftOptionFlag,
+                at: 0
+            ),
+            .none
+        )
+        XCTAssertFalse(detector.activate(at: 1))
+    }
+}
