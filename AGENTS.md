@@ -307,8 +307,10 @@ GitHub-сборка использует ad-hoc подпись, если нет 
 4. Cmd-C / Cmd-V / Cmd-A / Cmd-Tab и Option-Left / Option-Right работают штатно и не
    оставляют диктовку;
 5. Shift+Option+Volume Up/Down и другие consumer-key аккорды не показывают окно записи;
-6. Esc во время hold отменяет запись, а последующее отпускание не запускает новую;
-7. переключение «Нажатие ↔ Удержание» сохраняется после перезапуска.
+6. Option + неторопливый click по меню с alternate-item не оставляет запись висеть:
+   click отменяет hold, а release после menu tracking не должен требовать Esc;
+7. Esc во время hold отменяет запись, а последующее отпускание не запускает новую;
+8. переключение «Нажатие ↔ Удержание» сохраняется после перезапуска.
 
 ## 7. Правила для следующих функций форка
 
@@ -331,6 +333,32 @@ GitHub-сборка использует ad-hoc подпись, если нет 
 5. **обновить раздел 8 этого файла**.
 
 ## 8. Журнал изменений fork
+
+### 2026-09-23 — Hold menu-tracking stuck-recording fix
+
+После реального теста найден отдельный класс бага: Option меняет alternate items в
+нативных меню macOS, а nested menu-tracking loop может задержать доставку конкретного
+mouse/flagsChanged события в нашем event tap. В результате hold мог стартовать, release
+мог не дойти вовремя, и окно записи оставалось висеть до Esc.
+
+Исправление не переводит Cribe на активный перехват. К пассивному `.listenOnly` event tap
+добавлена резервная сверка с состоянием WindowServer:
+
+- `CGEventSource.keyState(.combinedSessionState, key:)` подтверждает, что конкретный
+  левый/правый ⌘/⌥ всё ещё реально зажат;
+- `CGEventSource.flagsState` ловит блокирующие modifiers;
+- `CGEventSource.buttonState` ловит уже удерживаемую кнопку мыши;
+- `CGEventSource.counterForEventType` запоминает счётчики keyDown/mouseDown/drag/scroll
+  на press и обнаруживает click даже если callback был задержан menu tracking;
+- если одновременно обнаружены click и release, **cancel имеет приоритет над finish**:
+  это системный аккорд, а не законченная диктовка;
+- активный hold имеет watchdog, поэтому потерянный/задержанный release больше не может
+  оставить вечную запись до Esc.
+
+Подход соответствует практике зрелых macOS automation tools: Hammerspoon напрямую читает
+состояние modifier-клавиш через `CGEventSourceKeyState`, а Karabiner отдельно ведёт
+физическое pressed-state и защищается от несбалансированных key_down/key_up, чтобы не
+получать stuck keys.
 
 ### 2026-09-23 — Hold shortcut conflict hardening
 
