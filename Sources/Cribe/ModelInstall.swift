@@ -5,15 +5,15 @@ import CribeCore
 
 /// Единый реестр локальных ASR-моделей.
 ///
-/// Старое имя `ModelInstall` сохранено намеренно: онбординг и окно миграции уже завязаны
-/// на этот долгоживущий объект. Теперь он по-прежнему обслуживает Parakeet через старые
-/// `state/download/isReady`, но дополнительно хранит GigaAM и импортированные GGUF.
+/// Старое имя `ModelInstall` сохранено намеренно: онбординг и настройки уже завязаны
+/// на этот долгоживущий объект. Он обслуживает Parakeet, GigaAM и импортированные
+/// transcribe.cpp-модели (GGUF и совместимые legacy Whisper .bin).
 @MainActor
 final class ModelInstall: ObservableObject {
     enum State: Equatable {
         case missing
-        /// Доля скачанного, 0...1. Для внешнего GGUF, где URLSession не сообщает удобную
-        /// долю в async API, используется 0 и UI показывает неопределённый ProgressView.
+        /// Доля скачанного, 0...1. Для встроенных загрузок Cribe показывает реальный
+        /// прогресс; 0 допустим только до первого callback от транспортного слоя.
         case downloading(Double)
         case preparing
         case ready
@@ -34,6 +34,7 @@ final class ModelInstall: ObservableObject {
         case activeModelCannotBeRemoved
         case unknownModel
         case modelNotReady
+        case unsupportedImportFormat
 
         var errorDescription: String? {
             switch self {
@@ -45,6 +46,8 @@ final class ModelInstall: ObservableObject {
                 return "Модель больше не найдена в реестре."
             case .modelNotReady:
                 return "Сначала модель нужно скачать или импортировать."
+            case .unsupportedImportFormat:
+                return "Поддерживаются модели .gguf и совместимые legacy Whisper .bin."
             }
         }
     }
@@ -57,6 +60,8 @@ final class ModelInstall: ObservableObject {
         let variant: String
         let languages: [String]
         let sizeBytes: Int64
+        /// Старые registry.json этого поля не имеют; nil трактуется как GGUF.
+        let format: String?
     }
 
     static let shared = ModelInstall(settings: .shared)
@@ -133,6 +138,10 @@ final class ModelInstall: ObservableObject {
 
     var isReady: Bool { state == .ready }
 
+    var hasAnyReadyModel: Bool {
+        entries.contains { state(for: $0.id) == .ready }
+    }
+
     var activeModelID: String { settings.activeASRModelID }
 
     var entries: [ModelEntry] {
@@ -159,7 +168,7 @@ final class ModelInstall: ObservableObject {
             var pieces = [model.architecture]
             if !model.variant.isEmpty { pieces.append(model.variant) }
             if !model.languages.isEmpty { pieces.append(model.languages.joined(separator: ", ")) }
-            pieces.append("GGUF")
+            pieces.append(model.format ?? "GGUF")
             return ModelEntry(
                 id: model.id,
                 displayName: model.displayName,
@@ -201,6 +210,11 @@ final class ModelInstall: ObservableObject {
     func activeEngine() -> TranscriptionEngine {
         normalizeActiveSelection()
         let id = settings.activeASRModelID
+
+        // Никаких скрытых скачиваний на первой диктовке.
+        guard activeModelIsInstalled else {
+            return MissingLocalModelEngine()
+        }
 
         if cachedEngineID == id, let cachedEngine {
             return cachedEngine
@@ -318,12 +332,15 @@ final class ModelInstall: ObservableObject {
 
             do {
                 try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-                let (temporary, response) = try await URLSession.shared.download(from: Self.gigaAMURL)
-                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-                try? FileManager.default.removeItem(at: staging)
-                try FileManager.default.moveItem(at: temporary, to: staging)
+                let downloader = ProgressFileDownloader(
+                    expectedBytes: Self.gigaAMBytes,
+                    progress: { [weak self] fraction in
+                        Task { @MainActor in
+                            self?.setState(.downloading(fraction), for: id)
+                        }
+                    }
+                )
+                try await downloader.download(from: Self.gigaAMURL, to: staging)
 
                 setState(.preparing, for: id)
                 let digest = try await Task.detached(priority: .utility) {
@@ -338,6 +355,9 @@ final class ModelInstall: ObservableObject {
                 try? FileManager.default.removeItem(at: gigaAMFileURL)
                 try FileManager.default.moveItem(at: staging, to: gigaAMFileURL)
                 setState(.ready, for: id)
+                if !activeModelIsInstalled {
+                    try? activate(id)
+                }
             } catch {
                 setState(.failed(error.localizedDescription), for: id)
             }
@@ -345,16 +365,20 @@ final class ModelInstall: ObservableObject {
         }
     }
 
-    /// Копирует выбранный пользователем GGUF в управляемый каталог Cribe и только после
-    /// полной загрузки runtime добавляет его в реестр.
+    /// Импорт GGUF и legacy Whisper .bin через тот же transcribe.cpp runtime.
     @discardableResult
-    func importGGUF(from source: URL) async throws -> String {
+    func importModel(from source: URL) async throws -> String {
         try FileManager.default.createDirectory(at: importedURL, withIntermediateDirectories: true)
 
+        let sourceExtension = source.pathExtension.lowercased()
+        guard sourceExtension == "gguf" || sourceExtension == "bin" else {
+            throw LibraryError.unsupportedImportFormat
+        }
+
         let token = UUID().uuidString.lowercased()
-        let id = "gguf-" + token
-        let filename = token + ".gguf"
-        let staging = rootURL.appendingPathComponent(".import-" + token + ".gguf")
+        let id = "model-" + token
+        let filename = token + "." + sourceExtension
+        let staging = rootURL.appendingPathComponent(".import-" + token + "." + sourceExtension)
         let destination = importedURL.appendingPathComponent(filename)
         try? FileManager.default.removeItem(at: staging)
         try FileManager.default.copyItem(at: source, to: staging)
@@ -375,7 +399,8 @@ final class ModelInstall: ObservableObject {
                 architecture: info.architecture,
                 variant: info.variant,
                 languages: info.languages,
-                sizeBytes: size
+                sizeBytes: size,
+                format: sourceExtension == "bin" ? "Whisper BIN" : "GGUF"
             )
             importedModels.append(record)
             do {
@@ -386,11 +411,19 @@ final class ModelInstall: ObservableObject {
                 throw error
             }
             setState(.ready, for: id)
+            if !activeModelIsInstalled {
+                try? activate(id)
+            }
             return id
         } catch {
             try? FileManager.default.removeItem(at: staging)
             throw error
         }
+    }
+
+    @discardableResult
+    func importGGUF(from source: URL) async throws -> String {
+        try await importModel(from: source)
     }
 
     func removeModel(_ id: String) throws {
@@ -482,6 +515,103 @@ final class ModelInstall: ObservableObject {
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
+}
+
+private final class MissingLocalModelEngine: TranscriptionEngine {
+    private struct NoModelError: LocalizedError {
+        var errorDescription: String? {
+            "Сначала выберите и установите модель распознавания в Настройки → Общие."
+        }
+    }
+
+    func prepare(
+        language: Language,
+        onState: @escaping @Sendable (ASRModelState) -> Void
+    ) async throws {
+        onState(.notLoaded)
+        throw NoModelError()
+    }
+
+    func transcribe(_ samples: [Float], language: Language, prompt: String) async throws -> String {
+        throw NoModelError()
+    }
+}
+
+private final class ProgressFileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let expectedBytes: Int64
+    private let progress: @Sendable (Double) -> Void
+    private var destination: URL?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var session: URLSession?
+    private var fileError: Error?
+
+    init(expectedBytes: Int64, progress: @escaping @Sendable (Double) -> Void) {
+        self.expectedBytes = expectedBytes
+        self.progress = progress
+    }
+
+    func download(from url: URL, to destination: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            self.destination = destination
+            self.continuation = continuation
+            let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+            self.session = session
+            session.downloadTask(with: url).resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let denominator = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : expectedBytes
+        guard denominator > 0 else { return }
+        progress(min(1, max(0, Double(totalBytesWritten) / Double(denominator))))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        guard let destination else {
+            fileError = URLError(.cannotCreateFile)
+            return
+        }
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+        } catch {
+            fileError = error
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        defer {
+            self.session?.finishTasksAndInvalidate()
+            self.session = nil
+            self.destination = nil
+            self.continuation = nil
+        }
+
+        if let error {
+            continuation?.resume(throwing: error)
+        } else if let fileError {
+            continuation?.resume(throwing: fileError)
+        } else if let http = task.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            continuation?.resume(throwing: URLError(.badServerResponse))
+        } else {
+            progress(1)
+            continuation?.resume()
+        }
+    }
 }
 
 private func modelFileSHA256(_ url: URL) throws -> String {
