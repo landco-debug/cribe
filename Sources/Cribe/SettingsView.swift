@@ -210,7 +210,41 @@ private struct GeneralPane: View {
                     }
                 }
 
-                Toggle("Автостоп по тишине (2 с)", isOn: $settings.autoStopEnabled)
+                Toggle("Автостоп по тишине", isOn: $settings.autoStopEnabled)
+
+                if settings.autoStopEnabled {
+                    Stepper(
+                        value: $settings.autoStopSilenceSeconds,
+                        in: 0.5...30,
+                        step: 0.5
+                    ) {
+                        HStack {
+                            Text("Пауза тишины:")
+                            Spacer()
+                            Text("\(settings.autoStopSilenceSeconds, specifier: "%.1f") с")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Toggle("Страховочный стоп записи", isOn: $settings.recordingLimitEnabled)
+
+                if settings.recordingLimitEnabled {
+                    Stepper(
+                        value: $settings.recordingLimitSeconds,
+                        in: 15...600,
+                        step: 5
+                    ) {
+                        HStack {
+                            Text("Максимальная запись:")
+                            Spacer()
+                            Text("\(Int(settings.recordingLimitSeconds)) с")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
                 if settings.language != .en {
                     Toggle("Мешаю русский и українську в одной диктовке", isOn: $settings.mixesUkrainian)
@@ -220,6 +254,11 @@ private struct GeneralPane: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     caption("Язык диктовки форсируется: распознавание его не угадывает.")
+                    caption(
+                        "Автостоп по тишине ждёт выбранную паузу после речи. Страховочный стоп "
+                            + "не зависит от тишины и штатно завершает запись по общей длительности, "
+                            + "если вы забыли нажать кнопку ещё раз."
+                    )
                     caption(
                         "Смешанная речь: распознавание слышит украинские слова верно, а вот "
                             + "AI-чистка без этой галочки переписывает их по-русски — «ще раз» "
