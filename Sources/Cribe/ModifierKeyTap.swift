@@ -2,11 +2,19 @@ import CoreGraphics
 import Foundation
 import CribeCore
 
-/// Слушает «голый» модификатор (по умолчанию правый ⌘) через CGEventTap и зовёт `onTap`,
-/// когда клавишу нажали и отпустили вхолостую. Решение о тапе принимает `ModifierTapDetector`.
+/// Слушает «голый» модификатор (по умолчанию правый ⌘) через CGEventTap.
 ///
-/// Тап только слушающий (`.listenOnly`): чужие ⌘-аккорды проходят нетронутыми.
+/// В режиме toggle чистый короткий tap распознаёт `ModifierTapDetector`; в режиме hold
+/// `ModifierHoldDetector` даёт push-to-talk с защитным окном от обычных системных аккордов.
+/// Event tap только слушающий (`.listenOnly`): чужие ⌘/⌥-события проходят нетронутыми.
 /// Нужен Accessibility — тот же, что и для вставки текста.
+enum ModifierKeyGesture: Sendable {
+    case tap
+    case holdBegan
+    case holdEnded
+    case holdCancelled
+}
+
 @MainActor
 final class ModifierKeyTap {
     /// Клавиатура и мышь: всё, чем можно составить аккорд с ⌘ (⌘-клик, ⌘-скролл, ⌘-drag).
@@ -27,25 +35,48 @@ final class ModifierKeyTap {
     /// Расхождение со `systemUptime`, после которого штамп события считаем недостоверным.
     private static let timestampTolerance: TimeInterval = 5
 
-    private let onTap: () -> Void
-    private var detector: ModifierTapDetector
+    private let onGesture: (ModifierKeyGesture) -> Void
+    private var behavior: DictationKeyBehavior
+    private var tapDetector: ModifierTapDetector
+    private var holdDetector: ModifierHoldDetector
+    private var holdStartTask: Task<Void, Never>?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
 
-    /// `blockingFlags` — device-биты остальных хоткей-модификаторов: при удержанном соседе
-    /// тап не начинается, иначе аккорд двух хоткеев запускал бы диктовку.
+    /// blockingFlags — device-биты остальных хоткей-модификаторов: при удержанном соседе
+    /// жест не начинается, иначе аккорд двух хоткеев запускал бы диктовку.
     init(
         keyCode: Int64 = ModifierTapDetector.rightCommandKeyCode,
         deviceFlag: UInt64 = ModifierTapDetector.rightCommandFlag,
         blockingFlags: UInt64 = 0,
-        onTap: @escaping () -> Void
+        behavior: DictationKeyBehavior = .toggle,
+        onGesture: @escaping (ModifierKeyGesture) -> Void
     ) {
-        self.detector = ModifierTapDetector(
+        self.behavior = behavior
+        self.tapDetector = ModifierTapDetector(
             keyCode: keyCode,
             deviceFlag: deviceFlag,
             blockingFlags: blockingFlags
         )
-        self.onTap = onTap
+        self.holdDetector = ModifierHoldDetector(
+            keyCode: keyCode,
+            deviceFlag: deviceFlag,
+            blockingFlags: blockingFlags
+        )
+        self.onGesture = onGesture
+    }
+
+    /// Режим меняется без пересоздания CGEventTap. Если настройку переключили прямо
+    /// посреди активного удержания, запись отменяем.
+    func setBehavior(_ behavior: DictationKeyBehavior) {
+        guard self.behavior != behavior else { return }
+        cancelPendingHoldStart()
+        if self.behavior == .hold, holdDetector.cancel() {
+            onGesture(.holdCancelled)
+        }
+        self.behavior = behavior
+        tapDetector.reset()
+        holdDetector.reset()
     }
 
     /// `false` — тап не поднялся (обычно нет разрешения Accessibility). Повторный вызов на
@@ -78,12 +109,17 @@ final class ModifierKeyTap {
         CGEvent.tapEnable(tap: tap, enable: true)
         self.tap = tap
         self.source = source
-        detector.reset()
+        tapDetector.reset()
+        holdDetector.reset()
         return true
     }
 
     /// Идемпотентна: снимает тап, если он стоял.
     func stop() {
+        cancelPendingHoldStart()
+        if behavior == .hold, holdDetector.cancel() {
+            onGesture(.holdCancelled)
+        }
         if let source {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
@@ -93,36 +129,91 @@ final class ModifierKeyTap {
         }
         source = nil
         tap = nil
-        detector.reset()
+        tapDetector.reset()
+        holdDetector.reset()
     }
 
     private func handle(type: CGEventType, event: CGEvent) {
         switch type {
-        // Систему устраивает только живой тап: после отключения его надо включить обратно,
-        // иначе клавиша молча перестаёт работать до перезапуска приложения.
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            cancelPendingHoldStart()
+            if behavior == .hold, holdDetector.cancel() {
+                fire(.holdCancelled)
+            }
             if let tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
-            detector.reset()
-        // Из событий клавиш и мыши не читается НИЧЕГО — ни keyCode, ни координаты, ни символы.
-        // Нужен только факт: между нажатием и отпусканием ⌘ что-то произошло, значит это аккорд.
+            tapDetector.reset()
+            holdDetector.reset()
+
+        // Содержимое чужого ввода не читаем. Для toggle достаточно погасить ожидаемый тап.
+        // Для hold pending гасится молча, а уже начавшаяся запись отменяется: человек
+        // превратил модификатор в обычный системный аккорд.
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel:
-            detector.cancel()
-        case .flagsChanged:
-            let fired = detector.flagsChanged(
-                keyCode: event.getIntegerValueField(.keyboardEventKeycode),
-                flags: event.flags.rawValue,
-                at: Self.seconds(of: event)
-            )
-            // Диктовка стартует вне колбэка: холодный запуск AVAudioEngine внутри него —
-            // это задержка обработки события и `kCGEventTapDisabledByTimeout`.
-            if fired {
-                Task { @MainActor [onTap] in onTap() }
+            switch behavior {
+            case .toggle:
+                tapDetector.cancel()
+            case .hold:
+                cancelPendingHoldStart()
+                if holdDetector.cancel() {
+                    fire(.holdCancelled)
+                }
             }
+
+        case .flagsChanged:
+            let eventKeyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            let flags = event.flags.rawValue
+            let time = Self.seconds(of: event)
+
+            switch behavior {
+            case .toggle:
+                if tapDetector.flagsChanged(keyCode: eventKeyCode, flags: flags, at: time) {
+                    fire(.tap)
+                }
+
+            case .hold:
+                switch holdDetector.flagsChanged(keyCode: eventKeyCode, flags: flags, at: time) {
+                case .arm:
+                    scheduleHoldStart()
+                case .finish:
+                    cancelPendingHoldStart()
+                    fire(.holdEnded)
+                case .cancel:
+                    cancelPendingHoldStart()
+                    fire(.holdCancelled)
+                case .none:
+                    // Быстрое отпускание или чужой модификатор до старта: отложенный
+                    // старт больше не имеет права сработать.
+                    cancelPendingHoldStart()
+                }
+            }
+
         default:
             break
         }
+    }
+
+    /// Реальный старт вынесен из CGEventTap и на 200 мс отложен: это окно, в котором
+    /// обычный Cmd-C/Cmd-Tab/Option-Left успевает заявить себя аккордом и погасить жест.
+    private func scheduleHoldStart() {
+        cancelPendingHoldStart()
+        holdStartTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, self.behavior == .hold else { return }
+            self.holdStartTask = nil
+            guard self.holdDetector.activate(at: ProcessInfo.processInfo.systemUptime) else { return }
+            self.onGesture(.holdBegan)
+        }
+    }
+
+    private func cancelPendingHoldStart() {
+        holdStartTask?.cancel()
+        holdStartTask = nil
+    }
+
+    /// Ни запуск аудиодвижка, ни остановка/отмена не выполняются внутри CGEventTap.
+    private func fire(_ gesture: ModifierKeyGesture) {
+        Task { @MainActor [onGesture] in onGesture(gesture) }
     }
 
     /// Аппаратное время события в секундах: оно не врёт, даже если run loop подвис

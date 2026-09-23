@@ -461,6 +461,57 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertNil(controller.activeSessionLanguage)
     }
 
+    /// Push-to-talk отпусканием заканчивает именно живую запись и отправляет её
+    /// в тот же конвейер, что штатный второй tap.
+    func testHoldStartAndReleaseProcessesRecording() async throws {
+        let spy = SpyDelivery(focus: .unknown)
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            delivery: spy
+        )
+
+        controller.startDictation()
+        try await wait(for: "старт hold-записи") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+
+        controller.finishDictation()
+        try await wait(for: "начало распознавания hold-записи") { engine.isTranscribing }
+        XCTAssertEqual(controller.pendingCount, 1)
+
+        engine.release()
+        try await wait(for: "вставку hold-записи") { spy.inserted.count == 1 }
+        XCTAssertEqual(spy.inserted, [HoldingEngine.text])
+    }
+
+    /// Критический случай push-to-talk: Esc выбросил запись, а физическая клавиша всё ещё
+    /// зажата. Последующее отпускание обязано быть no-op, иначе старый toggle запустил бы
+    /// вторую пустую запись сразу после отмены.
+    func testHoldReleaseAfterEscapeDoesNotRestartRecording() async throws {
+        let engine = GatedEngine()
+        let controller = makeController(engine: engine)
+
+        controller.startDictation()
+        engine.release()
+        try await wait(for: "старт hold-записи") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+
+        controller.cancelDictation()
+        XCTAssertEqual(controller.state, .cancelled)
+
+        controller.finishDictation()
+        XCTAssertEqual(controller.state, .cancelled)
+
+        try await wait(for: "возврат в простой после Esc") { controller.state == .idle }
+        XCTAssertNil(controller.activeSessionLanguage)
+        XCTAssertEqual(controller.pendingCount, 0)
+    }
+
     /// Esc на загрузке модели отменяет сессию так же, как второй хоткей, но мигает
     /// «Отменено»: без вспышки непонятно, дошло нажатие или загрузка просто идёт дальше.
     func testEscapeDuringModelLoadFlashesCancel() async throws {

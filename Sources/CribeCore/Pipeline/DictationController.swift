@@ -432,6 +432,28 @@ public final class DictationController: ObservableObject {
 
     // MARK: - Вход хоткеев
 
+    /// Push-to-talk: начать новую сессию, но никогда не останавливать уже живую.
+    /// Разделение старта и финиша принципиально для Esc: после отмены отпускание клавиши
+    /// вызывает finishDictation(), а тот не способен случайно запустить новую запись.
+    public func startDictation(translating: Bool? = nil) {
+        guard recordingState == nil else { return }
+        begin(translating: translating)
+    }
+
+    /// Push-to-talk: закончить только существующую сессию. Если модель ещё готовится,
+    /// отпускание означает «время удержания кончилось», поэтому будущую запись отменяем.
+    /// При отсутствии живой сессии — в том числе сразу после Esc — это чистый no-op.
+    public func finishDictation() {
+        switch recordingState {
+        case .recording:
+            stopAndProcess()
+        case .preparingModel:
+            pendingCancel = true
+        default:
+            break
+        }
+    }
+
     /// `translating` назначает переводом всю сессию поверх настройки; `nil` — как раньше,
     /// решает `settings.translateToEnglish`. На остановке (и на отмене загрузки) параметр
     /// не смотрим вовсе: остановить и отменить запись вправе любой хоткей, а решение
