@@ -55,6 +55,9 @@ public final class AppSettings: ObservableObject {
         static let translationTarget = "translationTarget"
         static let soundsEnabled = "soundsEnabled"
         static let autoStopEnabled = "autoStopEnabled"
+        static let autoStopSilenceSeconds = "autoStopSilenceSeconds"
+        static let recordingLimitEnabled = "recordingLimitEnabled"
+        static let recordingLimitSeconds = "recordingLimitSeconds"
         static let dictationHotkeyMode = "dictationHotkeyMode"
         static let dictationKeyBehavior = "dictationKeyBehavior"
         static let mixesUkrainian = "mixesUkrainian"
@@ -111,10 +114,28 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(soundsEnabled, forKey: Key.soundsEnabled) }
     }
 
-    /// Останавливать запись самой после 2 с тишины. По умолчанию выключено: запись
-    /// выключается только повторным нажатием хоткея.
+    /// Останавливать запись самой после заданной паузы тишины. По умолчанию выключено:
+    /// запись останавливается только повторным нажатием хоткея.
     @Published public var autoStopEnabled: Bool {
         didSet { defaults.set(autoStopEnabled, forKey: Key.autoStopEnabled) }
+    }
+
+    /// Сколько тишины после речи считать концом диктовки. Значение фиксируется в момент
+    /// старта очередной записи, поэтому правка в настройках не меняет уже идущую сессию.
+    @Published public var autoStopSilenceSeconds: Double {
+        didSet { defaults.set(autoStopSilenceSeconds, forKey: Key.autoStopSilenceSeconds) }
+    }
+
+    /// Независимая страховка от забытой включённой записи. Выключена по умолчанию, чтобы
+    /// обновление не обрезало привычные длинные диктовки без явного выбора человека.
+    @Published public var recordingLimitEnabled: Bool {
+        didSet { defaults.set(recordingLimitEnabled, forKey: Key.recordingLimitEnabled) }
+    }
+
+    /// Абсолютный потолок живой записи в секундах. В отличие от VAD, не зависит от речи
+    /// и тишины: по истечении срока запись штатно уезжает в распознавание.
+    @Published public var recordingLimitSeconds: Double {
+        didSet { defaults.set(recordingLimitSeconds, forKey: Key.recordingLimitSeconds) }
     }
 
     /// Человек мешает русский с украинским в одной диктовке.
@@ -218,6 +239,9 @@ public final class AppSettings: ObservableObject {
         pillStyle = defaults.string(forKey: Key.pillStyle).flatMap(PillStyle.init(rawValue:)) ?? .wave
         soundsEnabled = defaults.object(forKey: Key.soundsEnabled) as? Bool ?? true
         autoStopEnabled = defaults.object(forKey: Key.autoStopEnabled) as? Bool ?? false
+        autoStopSilenceSeconds = defaults.object(forKey: Key.autoStopSilenceSeconds) as? Double ?? 2.0
+        recordingLimitEnabled = defaults.object(forKey: Key.recordingLimitEnabled) as? Bool ?? false
+        recordingLimitSeconds = defaults.object(forKey: Key.recordingLimitSeconds) as? Double ?? 60.0
         // Дефолт `true`, и он же достаётся тем, кто обновился: прежняя галочка про украинские
         // вставки тоже стояла по умолчанию, а вторая её половина раньше жила отдельно.
         mixesUkrainian = defaults.object(forKey: Key.mixesUkrainian) as? Bool
