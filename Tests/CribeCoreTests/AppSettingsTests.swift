@@ -103,4 +103,15 @@ final class AppSettingsTests: XCTestCase {
         AppSettings(defaults: defaults).translationTarget = .pl
         XCTAssertEqual(AppSettings(defaults: defaults).translationTarget, TranslationTarget.pl)
     }
+
+    /// Обновление не должно внезапно превратить привычный tap в push-to-talk.
+    func testDictationKeyBehaviorDefaultsToToggle() {
+        XCTAssertEqual(AppSettings(defaults: defaults).dictationKeyBehavior, .toggle)
+    }
+
+    func testDictationKeyBehaviorPersists() {
+        AppSettings(defaults: defaults).dictationKeyBehavior = .hold
+        XCTAssertEqual(AppSettings(defaults: defaults).dictationKeyBehavior, .hold)
+    }
+
 }
