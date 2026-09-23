@@ -25,12 +25,24 @@ public enum TranscriptionEngineError: LocalizedError {
     }
 }
 
+/// Как подготовить записанный PCM перед конкретным ASR backend.
+///
+/// Большинство исторических движков Cribe используют прежний путь: поднять уровень всей
+/// записи и обрезать только края. Whisper через transcribe.cpp получает отдельный профиль,
+/// повторяющий Handy: исходная амплитуда + speech-only VAD без нашей пиковой нормализации.
+public enum ASRAudioInputProfile: Sendable, Equatable {
+    case standard
+    case handyWhisper
+}
+
 /// Движок распознавания речи: подготовка модели и распознавание PCM-сэмплов 16 кГц.
 ///
 /// Протокол остался после того, как движков стало снова один (Parakeet): им подставляются
 /// двойники в тестах, и без него каждый прогон конвейера требовал бы настоящей модели
 /// на диске.
 public protocol TranscriptionEngine: AnyObject {
+    /// Профиль входного аудио. По умолчанию сохраняет историческое поведение Cribe.
+    var audioInputProfile: ASRAudioInputProfile { get }
     /// Скачивает (при необходимости) и загружает модель. Повторный вызов — no-op.
     func prepare(language: Language, onState: @escaping @Sendable (ASRModelState) -> Void) async throws
 
@@ -50,6 +62,8 @@ public protocol TranscriptionEngine: AnyObject {
 }
 
 public extension TranscriptionEngine {
+    var audioInputProfile: ASRAudioInputProfile { .standard }
+
     /// Двойники в тестах перевод не изображают — им хватает обычного прохода.
     func transcribe(
         _ samples: [Float],
