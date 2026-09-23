@@ -2,7 +2,8 @@ import Foundation
 import OSLog
 import TranscribeCpp
 
-/// Универсальный backend для ASR-моделей GGUF, которые понимает transcribe.cpp.
+/// Универсальный backend для ASR-моделей, которые понимает transcribe.cpp:
+/// GGUF и legacy Whisper .bin (runtime определяет формат по содержимому файла).
 ///
 /// Модель задаётся путём к файлу. Сам runtime определяет архитектуру из GGUF и
 /// отвергает неподдерживаемые architecture/variant.
@@ -54,7 +55,7 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
         self.modelURL = modelURL
     }
 
-    /// Полная проверка GGUF до регистрации в Cribe.
+    /// Полная проверка модели до регистрации в Cribe.
     ///
     /// Загружаем модель тем же runtime, которым потом будем распознавать. Поэтому файл с
     /// корректным расширением, но неизвестной ASR-архитектурой, не сможет попасть в реестр.
