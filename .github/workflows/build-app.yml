@@ -1,0 +1,49 @@
+name: Build Cribe.app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Resources/**'
+      - 'scripts/**'
+      - 'Info.plist'
+      - 'Dev.entitlements'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/build-app.yml'
+
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Cribe.app (Apple Silicon)
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build app with official script
+        run: bash scripts/build-app.sh
+
+      - name: Verify app signature
+        run: codesign --verify --deep --strict --verbose=2 dist/Cribe.app
+
+      - name: Pack app
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Cribe.app Cribe-macOS-Apple-Silicon.zip
+
+      - name: Upload ready-to-install app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cribe-macOS-Apple-Silicon
+          path: Cribe-macOS-Apple-Silicon.zip
+          if-no-files-found: error
+          retention-days: 30

@@ -140,11 +140,12 @@ private struct GeneralPane: View {
             Section {
                 Picker("Кнопка записи:", selection: $settings.dictationHotkeyMode) {
                     Text("Правый ⌘").tag(HotkeyMode.rightCommand)
+                    Text("Левый ⌘").tag(HotkeyMode.leftCommand)
                     Text("Свой шорткат").tag(HotkeyMode.custom)
                 }
 
                 switch settings.dictationHotkeyMode {
-                case .rightCommand:
+                case .rightCommand, .leftCommand:
                     EmptyView()
                 case .custom:
                     KeyboardShortcuts.Recorder("Диктовка:", name: .toggleDictation)
@@ -162,6 +163,14 @@ private struct GeneralPane: View {
                             ? "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
                                 + "Esc отменяет запись."
                             : "Правый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                + "Нужно разрешение Accessibility."
+                    )
+                case .leftCommand:
+                    caption(
+                        accessibilityGranted
+                            ? "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
+                                + "Esc отменяет запись."
+                            : "Левый ⌥ — диктовка с переводом на \(settings.translationTarget.afterOn). "
                                 + "Нужно разрешение Accessibility."
                     )
                 case .custom:

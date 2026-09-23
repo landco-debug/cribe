@@ -111,4 +111,52 @@ final class ModifierTapDetectorTests: XCTestCase {
         detector.reset()
         XCTAssertFalse(detector.flagsChanged(keyCode: rcmd, flags: released, at: 0.1))
     }
+    /// Левая пара должна вести себя идентично правой: чистый тап ⌘ срабатывает.
+    func testLeftCommandPressAndReleaseFires() {
+        var detector = ModifierTapDetector(
+            keyCode: ModifierTapDetector.leftCommandKeyCode,
+            deviceFlag: ModifierTapDetector.leftCommandFlag,
+            blockingFlags: ModifierTapDetector.leftOptionFlag
+        )
+        let lcmd = ModifierTapDetector.leftCommandKeyCode
+        let lcmdDown = ModifierTapDetector.leftCommandFlag
+
+        XCTAssertFalse(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0))
+        XCTAssertTrue(detector.flagsChanged(keyCode: lcmd, flags: released, at: 0.1))
+    }
+
+    /// Обычное сочетание вроде левого ⌘C не должно запускать диктовку после отпускания ⌘.
+    func testLeftCommandInputBetweenCancels() {
+        var detector = ModifierTapDetector(
+            keyCode: ModifierTapDetector.leftCommandKeyCode,
+            deviceFlag: ModifierTapDetector.leftCommandFlag
+        )
+        let lcmd = ModifierTapDetector.leftCommandKeyCode
+        let lcmdDown = ModifierTapDetector.leftCommandFlag
+
+        _ = detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0)
+        detector.cancel()
+        XCTAssertFalse(detector.flagsChanged(keyCode: lcmd, flags: released, at: 0.1))
+    }
+
+    /// Левая ⌥ запускает перевод только чистым тапом и блокируется удержанным левым ⌘.
+    func testLeftOptionIsIndependentAndBlockedByLeftCommand() {
+        var detector = ModifierTapDetector(
+            keyCode: ModifierTapDetector.leftOptionKeyCode,
+            deviceFlag: ModifierTapDetector.leftOptionFlag,
+            blockingFlags: ModifierTapDetector.leftCommandFlag
+        )
+        let lcmd = ModifierTapDetector.leftCommandKeyCode
+        let lcmdDown = ModifierTapDetector.leftCommandFlag
+        let lalt = ModifierTapDetector.leftOptionKeyCode
+        let laltDown = ModifierTapDetector.leftOptionFlag
+
+        XCTAssertFalse(detector.flagsChanged(keyCode: lalt, flags: laltDown, at: 0))
+        XCTAssertTrue(detector.flagsChanged(keyCode: lalt, flags: released, at: 0.1))
+
+        XCTAssertFalse(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 0.2))
+        XCTAssertFalse(detector.flagsChanged(keyCode: lalt, flags: lcmdDown | laltDown, at: 0.3))
+        XCTAssertFalse(detector.flagsChanged(keyCode: lalt, flags: lcmdDown, at: 0.4))
+    }
+
 }

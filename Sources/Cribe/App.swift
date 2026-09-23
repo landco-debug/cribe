@@ -89,13 +89,16 @@ final class AppCore: ObservableObject {
     private var cards: CardStackController?
     private var rightCommandTap: ModifierKeyTap?
     private var rightOptionTap: ModifierKeyTap?
+    private var leftCommandTap: ModifierKeyTap?
+    private var leftOptionTap: ModifierKeyTap?
     private var escTap: KeyDownTap?
     private var hotkeyModeSubscription: AnyCancellable?
     private var escTapSubscription: AnyCancellable?
     /// Об отсутствии разрешения пишем один раз на серию попыток, а не на каждую активацию.
     private var loggedEscFailure = false
-    /// Состояние хоткей-тапов, уже записанное в журнал. Строку пишем только на его смену:
-    /// `retryHotkeyTapIfNeeded` зовётся на каждой активации приложения.
+    /// Состояние хоткей-тапов, уже записанное в журнал. Строку пишем только на смену
+    /// стороны или доступности: `retryHotkeyTapIfNeeded` зовётся на каждой активации приложения.
+    private var loggedTapMode: HotkeyMode?
     private var loggedTapState: Bool?
     private let logger = Logger(subsystem: "online.nazarovych.cribe", category: "Hotkey")
 
@@ -211,6 +214,19 @@ final class AppCore: ObservableObject {
             deviceFlag: ModifierTapDetector.rightOptionFlag,
             blockingFlags: ModifierTapDetector.rightCommandFlag
         ) { [controller] in controller.toggle(translating: true) }
+
+        // Левая пара устроена буквально так же. Отдельные device-биты не дают левому ⌘/⌥
+        // спутаться с правыми, а общий детектор по-прежнему отменяет тап при любом аккорде.
+        leftCommandTap = ModifierKeyTap(
+            keyCode: ModifierTapDetector.leftCommandKeyCode,
+            deviceFlag: ModifierTapDetector.leftCommandFlag,
+            blockingFlags: ModifierTapDetector.leftOptionFlag
+        ) { [controller] in controller.toggle() }
+        leftOptionTap = ModifierKeyTap(
+            keyCode: ModifierTapDetector.leftOptionKeyCode,
+            deviceFlag: ModifierTapDetector.leftOptionFlag,
+            blockingFlags: ModifierTapDetector.leftCommandFlag
+        ) { [controller] in controller.toggle(translating: true) }
         // `@Published` отдаёт текущее значение при подписке — режим применится и на старте.
         hotkeyModeSubscription = settings.$dictationHotkeyMode
             .receive(on: DispatchQueue.main)
@@ -269,33 +285,49 @@ final class AppCore: ObservableObject {
     }
 
     private func applyHotkeyMode(_ mode: HotkeyMode) {
-        guard let rightCommandTap, let rightOptionTap else { return }
+        guard let rightCommandTap, let rightOptionTap, let leftCommandTap, let leftOptionTap else { return }
+
+        // Активна только выбранная сторона. Так правая пара в левом режиме остаётся обычными
+        // модификаторами macOS (и наоборот), а свой шорткат вообще не держит modifier-tap.
         switch mode {
         case .rightCommand:
+            leftCommandTap.stop()
+            leftOptionTap.stop()
             // Оба тапа поднимаем всегда: `&&` пропустил бы второй вызов, а состояния тапов
             // должны совпадать. Разрешение у них общее — падают и поднимаются они вместе.
             let commandStarted = rightCommandTap.start()
             let optionStarted = rightOptionTap.start()
-            logTapState(started: commandStarted && optionStarted)
+            logTapState(started: commandStarted && optionStarted, mode: mode)
+        case .leftCommand:
+            rightCommandTap.stop()
+            rightOptionTap.stop()
+            let commandStarted = leftCommandTap.start()
+            let optionStarted = leftOptionTap.start()
+            logTapState(started: commandStarted && optionStarted, mode: mode)
         case .custom:
             rightCommandTap.stop()
             rightOptionTap.stop()
+            leftCommandTap.stop()
+            leftOptionTap.stop()
+            loggedTapMode = nil
             loggedTapState = nil
         }
     }
 
-    /// Единственная запись о хоткее в журнале: без неё «правый ⌘ не работает» неотличимо от
+    /// Единственная запись о хоткее в журнале: без неё «⌘ не работает» неотличимо от
     /// «тап не поднялся», а причина почти всегда одна — не выдан Accessibility.
     /// Смотреть так: `log show --predicate 'subsystem == "online.nazarovych.cribe"' --last 1h`
-    private func logTapState(started: Bool) {
-        guard loggedTapState != started else { return }
+    private func logTapState(started: Bool, mode: HotkeyMode) {
+        guard loggedTapMode != mode || loggedTapState != started else { return }
+        loggedTapMode = mode
         loggedTapState = started
+        let side = mode == .leftCommand ? "Левые" : "Правые"
         let state = started
             ? "подключены"
             : (TextInserter.hasAccessibility
                 ? "не подключены: Accessibility выдан, но тап не создался"
                 : "не подключены: нет разрешения Accessibility")
-        logger.notice("Правые ⌘/⌥ \(state, privacy: .public)")
+        logger.notice("\(side, privacy: .public) ⌘/⌥ \(state, privacy: .public)")
     }
 
     func markOnboardingShown() {

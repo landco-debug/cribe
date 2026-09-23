@@ -8,9 +8,15 @@ import Foundation
 /// модификатора и удержание дольше `holdLimit`. А если в момент нажатия удержан чужой
 /// хоткей-модификатор (`blockingFlags`), ожидание тапа не заводится вовсе.
 public struct ModifierTapDetector {
-    /// Правый ⌘: keyCode 54, device-бит `NX_DEVICERCMDKEYMASK` во флагах события.
+    /// Левый ⌘: keyCode 55 (`kVK_Command`), device-бит `NX_DEVICELCMDKEYMASK`.
+    public static let leftCommandKeyCode: Int64 = 55
+    public static let leftCommandFlag: UInt64 = 0x08
+    /// Правый ⌘: keyCode 54, device-бит `NX_DEVICERCMDKEYMASK`.
     public static let rightCommandKeyCode: Int64 = 54
     public static let rightCommandFlag: UInt64 = 0x10
+    /// Левый ⌥: keyCode 58 (`kVK_Option`), device-бит `NX_DEVICELALTKEYMASK`.
+    public static let leftOptionKeyCode: Int64 = 58
+    public static let leftOptionFlag: UInt64 = 0x20
     /// Правый ⌥: keyCode 61 (`kVK_RightOption`), device-бит `NX_DEVICERALTKEYMASK`.
     public static let rightOptionKeyCode: Int64 = 61
     public static let rightOptionFlag: UInt64 = 0x40

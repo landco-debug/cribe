@@ -10,9 +10,11 @@ public enum PillStyle: String, Codable, CaseIterable, Sendable {
     case words
 }
 
-/// Чем запускается диктовка: «голым» правым ⌘ или своим шорткатом.
+/// Чем запускается диктовка: «голой» парой ⌘/⌥ с выбранной стороны или своим шорткатом.
+/// ⌘ запускает обычную диктовку, ⌥ — диктовку с переводом.
 public enum HotkeyMode: String, Codable, CaseIterable, Sendable {
     case rightCommand
+    case leftCommand
     case custom
 }
 
@@ -142,7 +144,8 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(keptRecordings, forKey: Key.keptRecordings) }
     }
 
-    /// Кнопка записи: правый ⌘ (по умолчанию) или шорткат из KeyboardShortcuts.
+    /// Кнопка записи: правый ⌘ (по умолчанию), левый ⌘ или шорткат из KeyboardShortcuts.
+    /// В режимах модификаторов соответствующий ⌥ запускает диктовку с переводом.
     @Published public var dictationHotkeyMode: HotkeyMode {
         didSet { defaults.set(dictationHotkeyMode.rawValue, forKey: Key.dictationHotkeyMode) }
     }
