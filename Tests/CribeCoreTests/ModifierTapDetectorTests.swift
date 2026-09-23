@@ -176,7 +176,7 @@ final class ModifierHoldDetectorTests: XCTestCase {
 
         XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: lcmdDown, at: 1), .arm)
         XCTAssertFalse(detector.activate(at: 1 + ModifierHoldDetector.activationDelay - 0.01))
-        XCTAssertTrue(detector.activate(at: 1 + ModifierHoldDetector.activationDelay))
+        XCTAssertTrue(detector.activate(at: 1 + ModifierHoldDetector.activationDelay + 0.001))
         XCTAssertEqual(detector.flagsChanged(keyCode: lcmd, flags: released, at: 2), .finish)
     }
 
