@@ -955,6 +955,57 @@ Real-model GigaAM gate:
 Говорящий stem исправленной сборки:
 `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-Fix-LegacyCache-WhisperQuality-MetalExit-macOS-Apple-Silicon.zip`.
 
+#### 2026-09-24 — Whisper Handy-parity: качество custom BIN
+
+После пользовательского сравнения одного и того же
+`coriollon-whisper-large-v3-turbo-russian-codeswitch.bin` в Handy и Cribe выяснилось,
+что предыдущая гипотеза «разница в основном из-за отсутствия beam search» недостаточна:
+актуальный Handy 0.9.7 сам использует `transcribe-cpp 0.2.3` + Metal для custom
+Whisper BIN и на той же модели у пользователя даёт нормальные заглавные, пунктуацию и
+гораздо лучший RU/EN code-switching.
+
+Сверка с текущим `cjpais/Handy` / `landco-debug/Handy_optimize` показала три различия
+Cribe, которые реально меняли вход/recipe Whisper:
+
+1. **Пиковая нормализация Cribe не применяется к Whisper.**
+   Исторический pipeline поднимал всю запись почти до -1 dBFS, максимум x20, прежде чем
+   отдавать её VAD и ASR. Handy передаёт Whisper исходный 16 kHz Float32 PCM без такого
+   gain. Теперь `TranscriptionEngine.audioInputProfile` различает:
+   - `.standard` — прежний путь Cribe для Parakeet/GigaAM;
+   - `.handyWhisper` — raw amplitude для реально загруженной architecture=`whisper`.
+
+2. **Whisper VAD повторяет ключевой профиль Handy.**
+   Handy использует Silero threshold 0.30, 450 ms pre-roll и 450 ms hangover и выбрасывает
+   длинные неречевые интервалы. Старый Cribe использовал FluidAudio default threshold 0.85,
+   причём после сильной нормализации, и финально лишь обрезал края, оставляя внутреннюю
+   тишину.
+   `VadGate.handyWhisperFiltered` теперь:
+   - анализирует исходный PCM без нормализации;
+   - использует threshold 0.30;
+   - min silence 0.45 s;
+   - вручную добавляет 0.45 s padding до/после каждой speech-области;
+   - сливает перекрывающиеся padded ranges и вырезает только действительно длинные паузы.
+   FluidAudio VAD считает 256 ms блоками, поэтому это функциональная, не побитовая копия
+   Rust/Silero Handy, но operating point и смысл совпадают.
+
+3. **Decode options возвращены к shipping defaults Handy/transcribe.cpp.**
+   Предыдущая попытка насильно ставила `conditionOnPrevTokens=true`. В transcribe.cpp
+   v0.2.3 shipping default — false, а Handy его не меняет. Теперь family extension для
+   Whisper создаётся только при непустом real initial prompt; при пустом prompt run идёт
+   с обычными library defaults. `timestamps` остаётся library default AUTO.
+
+Профиль выбирается ПОСЛЕ `prepare`, по `model.arch == "whisper"`, то есть:
+- legacy Whisper `.bin` и Whisper GGUF получают Handy-parity;
+- GigaAM и другие transcribe.cpp architectures остаются на прежнем Cribe preprocessing;
+- обычные тестовые/сторонние `TranscriptionEngine` по умолчанию получают `.standard`.
+
+Live preview для Whisper также больше не peak-normalize PCM. Повторная транскрипция
+сохранённой записи намеренно по-прежнему обходится без VAD, но для Whisper тоже сохраняет
+исходную амплитуду.
+
+Говорящий stem этой проверки:
+`Cribe-ASR-Whisper-HandyParity-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`.
+
 #### Packaging regression: missing CTranscribe.framework (исправлено)
 
 Первая пользовательская сборка этого подпроекта прошла `swift build`, unit tests,

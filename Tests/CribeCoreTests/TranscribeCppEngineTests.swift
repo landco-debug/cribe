@@ -56,6 +56,7 @@ struct TranscribeCppEngineTests {
 
         let engine = TranscribeCppEngine(modelURL: modelURL)
         try await engine.prepare(language: .ru) { _ in }
+        #expect(engine.audioInputProfile == .standard)
         let text = try await engine.transcribe(samples, language: .ru, prompt: "")
         #expect(text == "Важно различать глаголы и дополнения.")
     }
@@ -96,6 +97,7 @@ struct TranscribeCppEngineTests {
 
         let engine = TranscribeCppEngine(modelURL: modelURL)
         try await engine.prepare(language: .en) { _ in }
+        #expect(engine.audioInputProfile == .handyWhisper)
         let text = try await engine.transcribe(samples, language: .en, prompt: "")
         #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }

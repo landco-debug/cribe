@@ -52,6 +52,51 @@ private final class PassThroughVad: SpeechGating, @unchecked Sendable {
     func feedStream(_ chunk: [Float]) async throws -> Bool { false }
 }
 
+/// Движок-шпион для проверки того, какой PCM реально приходит в ASR после preprocessing.
+private final class AudioInputSpyEngine: TranscriptionEngine, @unchecked Sendable {
+    let audioInputProfile: ASRAudioInputProfile
+    private let lock = NSLock()
+    private var captured: [Float]?
+
+    init(profile: ASRAudioInputProfile) {
+        self.audioInputProfile = profile
+    }
+
+    var seenSamples: [Float]? { lock.withLock { captured } }
+
+    func prepare(language: Language, onState: @escaping @Sendable (ASRModelState) -> Void) async throws {
+        onState(.ready)
+    }
+
+    func transcribe(_ samples: [Float], language: Language, prompt: String) async throws -> String {
+        lock.withLock { captured = samples }
+        return "Тест."
+    }
+}
+
+/// Различает обычный и Handy-путь VAD, не поднимая настоящую CoreML-модель.
+private final class AudioProfileVadSpy: SpeechGating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var standardCount = 0
+    private var handyCount = 0
+
+    var standardCalls: Int { lock.withLock { standardCount } }
+    var handyCalls: Int { lock.withLock { handyCount } }
+
+    func trimmed(_ samples: [Float]) async throws -> [Float]? {
+        lock.withLock { standardCount += 1 }
+        return samples
+    }
+
+    func handyWhisperFiltered(_ samples: [Float]) async throws -> [Float]? {
+        lock.withLock { handyCount += 1 }
+        return samples
+    }
+
+    func resetStream(silenceDuration: TimeInterval) async {}
+    func feedStream(_ chunk: [Float]) async throws -> Bool { false }
+}
+
 /// VAD-шпион: проверяем не внутренности FluidAudio, а контракт контроллера — какое значение
 /// он фиксирует для конкретной записи и передаёт гейту на reset.
 private final class VadSpy: SpeechGating, @unchecked Sendable {
@@ -949,6 +994,41 @@ final class DictationControllerTests: XCTestCase {
         return recorder
     }
 
+    // MARK: - ASR audio profiles
+
+    func testHandyWhisperProfileBypassesPeakNormalizationAndUsesWhisperVadPath() async throws {
+        let engine = AudioInputSpyEngine(profile: .handyWhisper)
+        let vad = AudioProfileVadSpy()
+        let samples = [Float](repeating: 0.02, count: Int(AudioCaptureFormat.sampleRate))
+
+        let controller = makeController(
+            engine: engine,
+            makeVad: { vad }
+        )
+        let text = try await controller.process(fileSamples: samples, language: .ru, useGPT: false)
+
+        XCTAssertEqual(text, "Тест.")
+        XCTAssertEqual(vad.handyCalls, 1)
+        XCTAssertEqual(vad.standardCalls, 0)
+        XCTAssertEqual(engine.seenSamples?.first ?? -1, 0.02, accuracy: 0.000_001)
+    }
+
+    func testStandardProfileKeepsHistoricalNormalizationAndTrimPath() async throws {
+        let engine = AudioInputSpyEngine(profile: .standard)
+        let vad = AudioProfileVadSpy()
+        let samples = [Float](repeating: 0.02, count: Int(AudioCaptureFormat.sampleRate))
+
+        let controller = makeController(
+            engine: engine,
+            makeVad: { vad }
+        )
+        _ = try await controller.process(fileSamples: samples, language: .ru, useGPT: false)
+
+        XCTAssertEqual(vad.standardCalls, 1)
+        XCTAssertEqual(vad.handyCalls, 0)
+        XCTAssertEqual(engine.seenSamples?.first ?? -1, 0.4, accuracy: 0.000_1)
+    }
+
     // MARK: - Бегущая строка
 
     /// Порог и главный регресс: пока склейка не набрала четырёх слов, строки нет вовсе
@@ -1036,7 +1116,9 @@ final class DictationControllerTests: XCTestCase {
         cardsWhenNoField: Bool = true,
         // Свои настройки нужны там, где проверяется то, что в них и живёт (разовая
         // подсказка): один и тот же объект переживает пересоздание контроллера.
-        settings: AppSettings? = nil
+        settings: AppSettings? = nil,
+        // Заглушка вместо Silero по умолчанию; профильные тесты подставляют шпиона.
+        makeVad: @escaping @Sendable () async throws -> SpeechGating = { PassThroughVad() }
     ) -> DictationController {
         let settings = settings ?? makeSettings()
         settings.cardsWhenNoField = cardsWhenNoField
@@ -1046,8 +1128,7 @@ final class DictationControllerTests: XCTestCase {
             settings: settings,
             recorder: recorder,
             delivery: delivery.delivery,
-            // Заглушка вместо Silero: прогон не поднимает CoreML-модель и не ходит за ней в сеть.
-            makeVad: { PassThroughVad() },
+            makeVad: makeVad,
             recordings: recordings
         )
     }

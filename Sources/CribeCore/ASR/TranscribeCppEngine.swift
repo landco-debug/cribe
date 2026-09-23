@@ -68,6 +68,15 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
         self.modelURL = modelURL
     }
 
+    /// После prepare архитектура уже известна из реально загруженной модели.
+    /// Handy подаёт Whisper исходную амплитуду и VAD-filtered speech, поэтому именно
+    /// whisper-family получает отдельный профиль. GigaAM и остальные transcribe.cpp
+    /// семейства сохраняют прежний вход Cribe.
+    public var audioInputProfile: ASRAudioInputProfile {
+        let architecture = locked { model?.arch.lowercased() }
+        return architecture == "whisper" ? .handyWhisper : .standard
+    }
+
     /// Полная проверка модели до регистрации в Cribe.
     ///
     /// Загружаем модель тем же runtime, которым потом будем распознавать. Поэтому файл с
@@ -150,15 +159,13 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
     }
 
 
-    /// Семантика запуска зависит от семейства.
+    /// Параметры run повторяют актуальный Handy для transcribe.cpp:
+    /// все общие knobs остаются library defaults, а Whisper family-extension создаётся
+    /// ТОЛЬКО когда есть реальный initial prompt. Пустая подсказка не должна сама по себе
+    /// менять decode recipe.
     ///
-    /// Для Whisper НЕ отключаем timestamps: AUTO у transcribe.cpp выбирает segment path,
-    /// на котором реализованы long-form chunking/temperature fallback. Прежнее .none
-    /// насильно уводило Whisper на упрощённый decode path.
-    ///
-    /// Если runtime сообщает, что это Whisper, передаём также словарный prompt и включаем
-    /// previous-token context между 30-секундными чанками. Для GigaAM и остальных семейств
-    /// family=nil, AUTO разрешается самим runtime в поддерживаемую гранулярность (обычно NONE).
+    /// В частности, не форсируем `conditionOnPrevTokens`: shipping default
+    /// transcribe.cpp v0.2.3 — false, и Handy оставляет его таким же.
     private func runOptions(
         model: Model,
         task: TranscriptionTask,
@@ -167,19 +174,17 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
         targetLanguage: String? = nil
     ) -> RunOptions {
         var family: RunExtension?
-        let whisperProbe = RunExtension.whisper(WhisperRunOptions())
-        if model.accepts(whisperProbe) {
-            family = .whisper(
-                WhisperRunOptions(
-                    initialPrompt: prompt.isEmpty ? nil : prompt,
-                    conditionOnPrevTokens: true
-                )
+        if !prompt.isEmpty {
+            let whisper = RunExtension.whisper(
+                WhisperRunOptions(initialPrompt: prompt)
             )
+            if model.accepts(whisper) {
+                family = whisper
+            }
         }
 
         return RunOptions(
             task: task,
-            timestamps: .auto,
             language: language.rawValue,
             targetLanguage: targetLanguage,
             family: family

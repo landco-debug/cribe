@@ -559,8 +559,11 @@ public final class DictationController: ObservableObject {
             Task { @MainActor in self?.apply(modelState) }
         }
         let vad = try await ensureVad()
-        let leveled = AudioNormalizer.normalized(fileSamples)
-        guard let speech = try await vad.trimmed(leveled) else { throw DictationError.noSpeech }
+        guard let speech = try await preparedSpeech(
+            fileSamples,
+            engine: engine,
+            vad: vad
+        ) else { throw DictationError.noSpeech }
 
         let entries = dictionary.entries
         processingState = .transcribing
@@ -583,6 +586,24 @@ public final class DictationController: ObservableObject {
             config: settings.gptConfig,
             mixesUkrainian: settings.mixesUkrainian
         )
+    }
+
+    /// Подготовка финального PCM зависит от семейства модели.
+    ///
+    /// Исторический путь Cribe оставлен для Parakeet/GigaAM: пиковая нормализация,
+    /// затем только обрезка краёв VAD. Whisper через transcribe.cpp повторяет Handy:
+    /// исходная амплитуда без AudioNormalizer и speech-only VAD с threshold/padding Handy.
+    private func preparedSpeech(
+        _ samples: [Float],
+        engine: TranscriptionEngine,
+        vad: SpeechGating
+    ) async throws -> [Float]? {
+        switch engine.audioInputProfile {
+        case .standard:
+            return try await vad.trimmed(AudioNormalizer.normalized(samples))
+        case .handyWhisper:
+            return try await vad.handyWhisperFiltered(samples)
+        }
     }
 
     // MARK: - Запись
@@ -805,7 +826,7 @@ public final class DictationController: ObservableObject {
                 next = next.advanced(by: Self.livePreviewPeriod)
                 try? await Task.sleep(until: next)
                 guard !Task.isCancelled, let self else { return }
-                guard let tail = self.livePreviewTail() else { continue }
+                guard let tail = self.livePreviewTail(for: session.engine) else { continue }
                 guard let text = try? await self.gate.transcribe(
                     session.engine,
                     tail,
@@ -829,7 +850,7 @@ public final class DictationController: ObservableObject {
     }
 
     /// Хвост записи для предпросмотра — или nil, если читать нечего или сейчас не время.
-    private func livePreviewTail() -> [Float]? {
+    private func livePreviewTail(for engine: TranscriptionEngine) -> [Float]? {
         guard isRecording, pending.isEmpty else { return nil }
         let captured = recorder.capturedSamples
         guard captured.count >= AudioCaptureFormat.samples(seconds: Self.livePreviewMinimumSeconds) else {
@@ -837,6 +858,13 @@ public final class DictationController: ObservableObject {
         }
         let window = AudioCaptureFormat.samples(seconds: Self.livePreviewSeconds)
         let tail = captured.count > window ? Array(captured.suffix(window)) : captured
+
+        // Handy не нормализует PCM перед Whisper. Даже preview не должен обучать пользователя
+        // другой картине распознавания, чем финальный проход.
+        if engine.audioInputProfile == .handyWhisper {
+            return tail
+        }
+
         livePreviewPeak = max(livePreviewPeak, AudioNormalizer.peak(tail))
         return AudioNormalizer.scaled(tail, by: AudioNormalizer.gain(forPeak: livePreviewPeak))
     }
@@ -1056,20 +1084,20 @@ public final class DictationController: ObservableObject {
         // На диск ложится исходная запись, без подъёма уровня: архив обязан быть тем,
         // что и правда сказали в микрофон.
         let backup = startBackup(samples)
-        // Уровень поднимаем один раз на всю запись и дальше работаем только с поднятым:
-        // и ворота речи, и Whisper обязаны слышать одно и то же (см. `AudioNormalizer`).
-        let leveled = AudioNormalizer.normalized(samples)
         processingState = .transcribing
         publish()
         do {
             let entries = dictionary.entries
             // Решение о переводе принято на стопе — здесь его только исполняем.
             let wantsTranslation = session.translatesToEnglish
-            // Распознавание одним проходом по обрезанной записи. Потокового пути больше
-            // нет и не нужно: он существовал, потому что Whisper считала девятисекундную
-            // запись четыре секунды, а Parakeet ту же — за десятые доли.
+            // Финальный PCM готовится по профилю выбранного engine. Для Whisper это
+            // Handy-parity: без пиковой нормализации и с speech-only VAD.
             let vad = try await ensureVad()
-            guard let speech = try await vad.trimmed(leveled) else {
+            guard let speech = try await preparedSpeech(
+                samples,
+                engine: session.engine,
+                vad: vad
+            ) else {
                 throw DictationError.noSpeech
             }
             let raw = try await gate.transcribe(
@@ -1710,12 +1738,15 @@ public final class DictationController: ObservableObject {
         try await gate.prepare(engine, language: language) { [weak self] modelState in
             Task { @MainActor in self?.apply(modelState) }
         }
-        // Ворота речи не зовём вовсе: на повторе честнее отдать модели всё, включая тишину,
-        // чем во второй раз недосчитаться. Уровень поднимаем — это ровно то, чего тихой
-        // записи не хватало в первый раз.
+        // Ворота речи не зовём вовсе: на повторе честнее отдать модели всё, включая тишину.
+        // Но Whisper всё равно получает исходную амплитуду, как в Handy; нормализация
+        // остаётся только историческим профилем остальных движков.
+        let replaySamples = engine.audioInputProfile == .handyWhisper
+            ? samples
+            : AudioNormalizer.normalized(samples)
         let raw = try await gate.transcribe(
             engine,
-            AudioNormalizer.normalized(samples),
+            replaySamples,
             language: language,
             prompt: ""
         )
