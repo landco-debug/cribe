@@ -48,7 +48,24 @@ private final class PromptSpyEngine: TranscriptionEngine, @unchecked Sendable {
 /// поэтому прогон обходится без модели и без единого сетевого запроса.
 private final class PassThroughVad: SpeechGating, @unchecked Sendable {
     func trimmed(_ samples: [Float]) async throws -> [Float]? { samples.isEmpty ? nil : samples }
-    func resetStream() async {}
+    func resetStream(silenceDuration: TimeInterval) async {}
+    func feedStream(_ chunk: [Float]) async throws -> Bool { false }
+}
+
+/// VAD-шпион: проверяем не внутренности FluidAudio, а контракт контроллера — какое значение
+/// он фиксирует для конкретной записи и передаёт гейту на reset.
+private final class VadSpy: SpeechGating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [TimeInterval] = []
+
+    var lastDuration: TimeInterval? { lock.withLock { durations.last } }
+
+    func trimmed(_ samples: [Float]) async throws -> [Float]? { samples.isEmpty ? nil : samples }
+
+    func resetStream(silenceDuration: TimeInterval) async {
+        lock.withLock { durations.append(silenceDuration) }
+    }
+
     func feedStream(_ chunk: [Float]) async throws -> Bool { false }
 }
 
@@ -429,6 +446,101 @@ final class DictationControllerTests: XCTestCase {
         recorder.capturedSilence = true
         let other = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "что-то своё"])
         XCTAssertEqual(controller.message(for: other), "что-то своё")
+    }
+
+    // MARK: - Таймеры записи
+
+    /// Настраиваемая пауза должна доехать до VAD ровно при старте живой записи.
+    func testConfiguredSilenceDurationReachesVad() async throws {
+        let settings = makeSettings()
+        settings.autoStopSilenceSeconds = 3.5
+        let vad = VadSpy()
+        let controller = DictationController(
+            engine: PromptSpyEngine(),
+            dictionary: UserDictionary(url: dictionaryURL),
+            settings: settings,
+            recorder: StubRecorder(),
+            delivery: SpyDelivery(focus: .unknown).delivery,
+            makeVad: { vad },
+            recordings: recordings
+        )
+
+        controller.toggle()
+        try await wait(for: "старт записи с настроенным VAD") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+
+        XCTAssertEqual(vad.lastDuration, 3.5)
+        controller.cancelDictation()
+    }
+
+    /// Абсолютный лимит не зависит от VAD: даже без единого speech-end события он должен
+    /// штатно остановить запись и отправить уже записанный буфер в обычный конвейер.
+    func testRecordingLimitStopsAndProcessesRecording() async throws {
+        let settings = makeSettings()
+        settings.recordingLimitEnabled = true
+        settings.recordingLimitSeconds = 0.05
+
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+
+        controller.toggle()
+        try await wait(for: "старт записи с лимитом") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        try await wait(for: "автостоп по общему лимиту") { engine.isTranscribing }
+
+        XCTAssertEqual(controller.pendingCount, 1)
+        XCTAssertEqual(controller.state, .transcribing)
+
+        engine.release()
+        try await wait(for: "завершение записи с лимитом") { controller.pendingCount == 0 }
+    }
+
+    /// Таймер принадлежит конкретной сессии. Ручной стоп первой записи обязан погасить
+    /// её задачу; иначе старый deadline способен оборвать уже вторую диктовку.
+    func testStoppedRecordingLimitCannotStopNextRecording() async throws {
+        let settings = makeSettings()
+        settings.recordingLimitEnabled = true
+        settings.recordingLimitSeconds = 0.10
+
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+
+        controller.toggle()
+        try await wait(for: "старт первой записи") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        controller.toggle()  // ручной стоп первой — её 100-мс таймер должен быть отменён
+
+        settings.recordingLimitSeconds = 1.0
+        controller.toggle()
+        try await wait(for: "старт второй записи") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        if case .recording = controller.state {
+            // Всё верно: deadline первой сессии не задел вторую.
+        } else {
+            XCTFail("таймер первой записи остановил следующую сессию")
+        }
+
+        controller.cancelDictation()
+        engine.release()
+        try await wait(for: "очередь первой записи") { controller.pendingCount == 0 }
     }
 
     // MARK: - Отмена по Esc
