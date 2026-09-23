@@ -59,4 +59,45 @@ struct TranscribeCppEngineTests {
         let text = try await engine.transcribe(samples, language: .ru, prompt: "")
         #expect(text == "Важно различать глаголы и дополнения.")
     }
+
+    /// Проверяет именно legacy whisper.cpp .bin через тот же Swift wrapper/xcframework,
+    /// который использует пользовательский импорт. В обычном CI env vars отсутствуют.
+    @Test("Реальный legacy Whisper .bin загружается и распознаёт fixture")
+    func realWhisperBINSmoke() async throws {
+        guard
+            let modelPath = ProcessInfo.processInfo.environment["TRANSCRIBE_WHISPER_BIN"],
+            let wavPath = ProcessInfo.processInfo.environment["TRANSCRIBE_WHISPER_BIN_WAV"]
+        else { return }
+
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let info = try TranscribeCppEngine.inspectModel(at: modelURL)
+        #expect(info.architecture.lowercased().contains("whisper"))
+        #expect(info.nativeSampleRate == 16_000)
+
+        let file = try AVAudioFile(forReading: URL(fileURLWithPath: wavPath))
+        #expect(file.processingFormat.sampleRate == 16_000)
+        #expect(file.processingFormat.channelCount == 1)
+
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ) else {
+            Issue.record("Не удалось создать PCM-буфер Whisper BIN fixture")
+            return
+        }
+        try file.read(into: buffer)
+        guard let channel = buffer.floatChannelData?[0] else {
+            Issue.record("Whisper BIN fixture не удалось получить как Float32 PCM")
+            return
+        }
+        let samples = Array(
+            UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
+        )
+
+        let engine = TranscribeCppEngine(modelURL: modelURL)
+        try await engine.prepare(language: .en) { _ in }
+        let text = try await engine.transcribe(samples, language: .en, prompt: "")
+        #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
 }

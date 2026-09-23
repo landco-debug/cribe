@@ -37,9 +37,7 @@ struct ModelUpdateView: View {
         .onAppear {
             install.refresh()
             legacyBytes = LegacyWhisperCache.shared.bytesOnDisk()
-            // Качать начинаем сами: экран показан ровно потому, что без модели работать
-            // нечем, и лишнее нажатие тут ничего не решает.
-            install.download()
+            // Никаких автоматических загрузок: пользователь сам выбирает модель и момент.
         }
     }
 

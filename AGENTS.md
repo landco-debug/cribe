@@ -34,14 +34,14 @@
 
 Примеры:
 
-- `Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip`
+- `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`
 - `Cribe-HoldToDictate-macOS-Apple-Silicon.zip`
 - `Cribe-GigaAM-GGUF-TranscribeCpp-smoke-<shortSHA>.zip`
 
 **Не использовать безликие имена** вроде `build.zip`, `artifact.zip`, `final.zip`, `working.zip`, `Cribe-macOS-Apple-Silicon.zip`, если рядом могут существовать сборки разных подпроектов или стадий.
 
 Все связанные сущности одной сборки должны по возможности использовать **один и тот же смысловой stem**. Например, если архив называется
-`Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip`, Artifact и соответствующий workflow/subsection должны также содержать `GigaAM-GGUF-TranscribeCpp`.
+`Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`, Artifact и соответствующий workflow/subsection должны также содержать `GigaAM-GGUF-TranscribeCpp`.
 
 Исключение: внутреннее каноническое имя, которое нельзя безопасно менять без риска для bundle ID, подписи, runtime, путей обновления или пользовательского UX (например, `Cribe.app` внутри архива), может оставаться штатным. В этом случае **внешний контейнер/Artifact обязан быть говорящим**.
 
@@ -688,7 +688,7 @@ GitHub Actions:
 Пользователь установил итоговую сборку и подтвердил:
 **«Вроде бы всё работает как надо»**.
 
-### 2026-09-23 — Подпроект GigaAM-GGUF-TranscribeCpp
+### 2026-09-23 — Подпроект ASR-Models-GigaAM-GGUF-BIN-TranscribeCpp
 
 Подпроект добавлен поверх `main`
 `ba1e8e57d5deeea893eb04fd0a2d610033111e12` и не переписывает hold-to-dictate,
@@ -833,7 +833,7 @@ GigaAM v3 обучена для сравнительно коротких uttera
   — новый explicit-engine contract.
 - `Tests/CribeAppTests/ModelInstallTests.swift`
   — built-ins, fallback при пропавшей модели, invalid import не попадает в registry.
-- `.github/workflows/gigaam-smoke.yml`
+- `.github/workflows/asr-real-model-smoke.yml`
   — отдельный real-model acceptance gate, чтобы обычный CI не скачивал ~261 MiB каждый раз.
 
 #### Проверка до merge
@@ -873,10 +873,39 @@ Real-model GigaAM gate:
 - упаковка и upload Artifact — success;
 - Artifact исходной финальной проверки: `Cribe-macOS-Apple-Silicon` (id `10773881609`).
 
-Именование итоговых сборок этого подпроекта далее: `Cribe-GigaAM-GGUF-TranscribeCpp-macOS-Apple-Silicon.zip`.
+Именование итоговых сборок этого подпроекта далее: `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`.
 
 Итого: интеграция transcribe.cpp + GigaAM + universal GGUF находится в рабочем `main`,
 а реальный GigaAM Q8_0 smoke и финальная .app-сборка подтверждены GitHub Actions.
+
+#### 2026-09-24 — UX после пользовательского теста: выбор модели, прогресс GigaAM, Whisper BIN
+
+После установки исправленной packaged-сборки пользователь подтвердил запуск приложения и
+нашёл три UX-регрессии. Все три входят в этот подпроект:
+
+1. **Никаких автоматических скачиваний моделей.**
+   Старое `ModelUpdateView.onAppear -> install.download()` автоматически тянуло Parakeet.
+   Кроме того, `ParakeetEngine.prepare()` способен скачать веса на первой диктовке.
+   Оба пути закрыты: при отсутствии активной модели открываются обычные настройки выбора,
+   а pipeline получает `MissingLocalModelEngine`, который просит сначала выбрать модель.
+
+2. **GigaAM показывает настоящий процент.**
+   Старый `URLSession.download(from:)` сообщал только финал, поэтому UI видел
+   `downloading(0)`. Теперь `URLSessionDownloadDelegate` публикует byte-progress; если
+   сервер не отдаёт Content-Length, используется закреплённый размер Q8_0.
+
+3. **Импорт поддерживает GGUF и legacy Whisper .bin.**
+   Зафиксированный `transcribe.cpp v0.2.3` уже содержит legacy whisper.cpp `.bin` adapter
+   и magic-byte dispatch. Ограничение было только в UI Cribe. Кнопка теперь называется
+   **«Добавить модель…»**, принимает `.gguf` и `.bin`, а совместимость доказывается
+   реальной загрузкой через transcribe.cpp. Посторонний `.bin` отвергается.
+
+Онбординг показывает Parakeet и GigaAM как выбор, ничего не скачивает сам и ведёт в
+настройки для сторонней модели. Если рабочей модели ещё нет, явно скачанная/импортированная
+модель становится активной.
+
+Говорящее имя сборки после этих изменений:
+`Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`.
 
 #### Packaging regression: missing CTranscribe.framework (исправлено)
 
