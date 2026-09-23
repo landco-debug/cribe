@@ -131,6 +131,7 @@ private struct GeneralPane: View {
     @State private var launchNote: String?
     @State private var accessibilityGranted = TextInserter.hasAccessibility
     @State private var importingModel = false
+    @State private var modelImportBusy = false
     @State private var modelError: String?
     private static let modelFileTypes: [UTType] = [
         UTType(filenameExtension: "gguf") ?? .data,
@@ -292,6 +293,16 @@ private struct GeneralPane: View {
                 } label: {
                     Label("Добавить модель…", systemImage: "plus")
                 }
+                .disabled(modelImportBusy)
+
+                if modelImportBusy {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Копирую и проверяю модель…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 if let modelError {
                     Text(modelError)
@@ -409,10 +420,12 @@ private struct GeneralPane: View {
             case .success(let urls):
                 guard let url = urls.first else { return }
                 modelError = nil
+                modelImportBusy = true
                 Task {
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer {
                         if scoped { url.stopAccessingSecurityScopedResource() }
+                        modelImportBusy = false
                     }
                     do {
                         let id = try await install.importModel(from: url)
