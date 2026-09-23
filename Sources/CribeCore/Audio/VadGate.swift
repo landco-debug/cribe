@@ -10,13 +10,13 @@ import Foundation
 public protocol SpeechGating: Sendable {
     /// Обрезает тишину по краям записи. `nil` — речи нет.
     func trimmed(_ samples: [Float]) async throws -> [Float]?
-    /// Сбрасывает состояние стрима перед новой записью.
-    func resetStream() async
+    /// Сбрасывает состояние стрима перед новой записью и фиксирует её порог тишины.
+    func resetStream(silenceDuration: TimeInterval) async
     /// Скармливает чанк записи. `true` — пора останавливаться по тишине.
     func feedStream(_ chunk: [Float]) async throws -> Bool
 }
 
-/// Silero VAD через FluidAudio (CoreML/ANE): автостоп по 2 с тишины в стриме
+/// Silero VAD через FluidAudio (CoreML/ANE): настраиваемый автостоп по тишине в стриме
 /// и обрезка тишины по краям готовой записи.
 /// Модель (~2 МБ) скачивается лениво при первом создании гейта.
 public actor VadGate: SpeechGating {
@@ -25,8 +25,9 @@ public actor VadGate: SpeechGating {
     private static let minSpeechSamples = VadManager.sampleRate / 2
 
     private let vad: VadManager
-    /// Для стрима: молчание 2 с → `.speechEnd` → автостоп.
-    private let streamConfig = VadSegmentationConfig(minSilenceDuration: 2.0)
+    /// Конфигурация принадлежит конкретной записи и меняется только вместе со сбросом
+    /// её stream-state. Значение ниже — безопасный стартовый дефолт до первого reset.
+    private var streamConfig = VadSegmentationConfig(minSilenceDuration: 2.0)
     private var streamState = VadStreamState.initial()
     /// Цепочка вызовов feedStream: актор реентерабелен, а `streamState` — read-modify-write.
     private var inFlight: Task<Bool, Error>?
@@ -51,13 +52,16 @@ public actor VadGate: SpeechGating {
         return speech
     }
 
-    /// Сбрасывает состояние стрима перед новой записью.
-    public func resetStream() {
+    /// Сбрасывает состояние стрима перед новой записью. Длительность тишины фиксируется
+    /// здесь, поэтому изменение настройки посреди диктовки начинает действовать со следующей.
+    public func resetStream(silenceDuration: TimeInterval) {
         generation += 1
+        streamConfig = VadSegmentationConfig(minSilenceDuration: max(0.1, silenceDuration))
         streamState = VadStreamState.initial()
     }
 
-    /// Скармливает чанк (4096 сэмплов 16 кГц). `true` — 2 с тишины после речи, пора останавливаться.
+    /// Скармливает чанк (4096 сэмплов 16 кГц). `true` — настроенная пауза тишины
+    /// после речи закончилась, пора останавливаться.
     /// Вызовы выстраиваются в очередь, чтобы состояние стрима обновлялось строго по порядку.
     public func feedStream(_ chunk: [Float]) async throws -> Bool {
         // Поколение фиксируем в момент постановки в очередь, а не в начале счёта: чанк,
