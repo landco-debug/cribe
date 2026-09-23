@@ -907,6 +907,21 @@ Real-model GigaAM gate:
 Говорящее имя сборки после этих изменений:
 `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon.zip`.
 
+Финальный squash-commit в `main`:
+`e59519a16bc242f7c70e3d344eecc92d97050dbd`.
+
+Для exact merge tree подтверждены:
+
+- CI run `35923306280` — **success**;
+- packaged app build run `35923306174` — **success**;
+- runtime dependency check готового `Cribe.app` — **success**;
+- real packaged-app launch smoke — **success**;
+- ASR real-model smoke run `35923306192` — **success**;
+- реальная GigaAM Q8_0 — **success**;
+- реальный legacy whisper.cpp `ggml-tiny-q8_0.bin` — **success**;
+- финальный Artifact: `Cribe-ASR-Models-GGUF-BIN-TranscribeCpp-macOS-Apple-Silicon`,
+  id `10777763491`.
+
 #### Packaging regression: missing CTranscribe.framework (исправлено)
 
 Первая пользовательская сборка этого подпроекта прошла `swift build`, unit tests,
