@@ -55,6 +55,7 @@ public final class AppSettings: ObservableObject {
         static let translateToEnglish = "translateToEnglish"
         static let translationTarget = "translationTarget"
         static let soundsEnabled = "soundsEnabled"
+        static let quietMediaDuringRecording = "quietMediaDuringRecording"
         static let autoStopEnabled = "autoStopEnabled"
         static let autoStopSilenceSeconds = "autoStopSilenceSeconds"
         static let recordingLimitEnabled = "recordingLimitEnabled"
@@ -121,6 +122,12 @@ public final class AppSettings: ObservableObject {
     /// Чаймы старта и окончания записи.
     @Published public var soundsEnabled: Bool {
         didSet { defaults.set(soundsEnabled, forKey: Key.soundsEnabled) }
+    }
+
+    /// Приостанавливать поддерживаемые плееры и временно приглушать системный вывод,
+    /// только пока действительно работает микрофон. Выключено для существующих установок.
+    @Published public var quietMediaDuringRecording: Bool {
+        didSet { defaults.set(quietMediaDuringRecording, forKey: Key.quietMediaDuringRecording) }
     }
 
     /// Останавливать запись самой после заданной паузы тишины. По умолчанию выключено:
@@ -248,6 +255,7 @@ public final class AppSettings: ObservableObject {
             .flatMap(TranslationTarget.init(rawValue:)) ?? .en
         pillStyle = defaults.string(forKey: Key.pillStyle).flatMap(PillStyle.init(rawValue:)) ?? .wave
         soundsEnabled = defaults.object(forKey: Key.soundsEnabled) as? Bool ?? true
+        quietMediaDuringRecording = defaults.object(forKey: Key.quietMediaDuringRecording) as? Bool ?? false
         autoStopEnabled = defaults.object(forKey: Key.autoStopEnabled) as? Bool ?? false
         autoStopSilenceSeconds = defaults.object(forKey: Key.autoStopSilenceSeconds) as? Double ?? 2.0
         recordingLimitEnabled = defaults.object(forKey: Key.recordingLimitEnabled) as? Bool ?? false
