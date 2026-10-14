@@ -49,6 +49,15 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(second.recordingLimitSeconds, 45.0)
     }
 
+    /// Media control is opt-in: modifying another application's playback must not start
+    /// silently after an update, and the choice must survive a relaunch.
+    func testMediaPauseDefaultsOffAndPersists() {
+        let first = AppSettings(defaults: defaults)
+        XCTAssertFalse(first.quietMediaDuringRecording)
+        first.quietMediaDuringRecording = true
+        XCTAssertTrue(AppSettings(defaults: defaults).quietMediaDuringRecording)
+    }
+
     /// Учёба на правках включена по умолчанию: без неё словарь пополняется только руками,
     /// а выключить её человек может и в онбординге, и в настройках.
     func testLearningFromEditsIsOnByDefault() {
