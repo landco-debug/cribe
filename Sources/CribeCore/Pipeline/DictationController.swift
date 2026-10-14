@@ -336,6 +336,17 @@ public final class DictationController: ObservableObject {
     /// переписывает и её, иначе история осталась бы с нечищеным текстом навсегда.
     private var retryHistoryID: UUID?
 
+    /// App-level media control; absent in CLI and tests, so it never changes their behavior.
+    public var onCaptureWillStart: (() async -> Void)?
+    public var onCaptureDidEnd: (() -> Void)?
+    private var mediaQuietingActive = false
+
+    private func restoreMediaIfNeeded() {
+        guard mediaQuietingActive else { return }
+        mediaQuietingActive = false
+        onCaptureDidEnd?()
+    }
+
     private let gate = EngineGate()
     private let engineProvider: @MainActor () -> TranscriptionEngine
     private let dictionary: UserDictionary
@@ -663,6 +674,7 @@ public final class DictationController: ObservableObject {
                 recorder.setInputDevice(uid: settings.inputDeviceUID)
                 try await startCapture(session)
             } catch {
+                restoreMediaIfNeeded()
                 recording = nil
                 recordingState = nil
                 publish()
@@ -715,6 +727,19 @@ public final class DictationController: ObservableObject {
             Task { @MainActor in self?.captureFailed(reason) }
         }
 
+        // Media are touched only when recording is actually ready, never during model
+        // preparation. Await the pause so the first PCM block contains no player audio.
+        if settings.quietMediaDuringRecording, let onCaptureWillStart {
+            await onCaptureWillStart()
+            mediaQuietingActive = true
+        }
+        // Another hotkey/Esc can cancel while an AppleScript pause is in flight.
+        if pendingCancel {
+            restoreMediaIfNeeded()
+            cancelSession()
+            return
+        }
+
         // Микрофон поднимаем ровно здесь: подъём VAD (CoreML/ANE) выше занимает секунды,
         // и всё это время индикатор записи гореть не должен. Сам подъём асинхронный —
         // главный поток на нём не ждёт.
@@ -732,6 +757,7 @@ public final class DictationController: ObservableObject {
             chunks = nil
             recorder.onLevel = nil
             recorder.onFailure = nil
+            restoreMediaIfNeeded()
             throw error
         }
 
@@ -974,6 +1000,7 @@ public final class DictationController: ObservableObject {
         recorder.onLevel = nil
         recorder.onFailure = nil
         _ = recorder.stop()
+        restoreMediaIfNeeded()
         scheduleMicRelease()
         publish()
         fail(reason)
@@ -996,6 +1023,7 @@ public final class DictationController: ObservableObject {
         recorder.onFailure = nil
 
         session.samples = recorder.stop()
+        restoreMediaIfNeeded()
         session.capturedSilence = recorder.capturedSilence
         session.translatesToEnglish = session.translating ?? settings.translateToEnglish
         // Микрофон дальше не нужен: распознавание и GPT-чистка занимают секунды, и всё это
@@ -1037,6 +1065,7 @@ public final class DictationController: ObservableObject {
         recorder.onLevel = nil
         recorder.onFailure = nil
         _ = recorder.stop()
+        restoreMediaIfNeeded()
         // Микрофон отпускаем по обычному расписанию: отмена — не повод держать индикатор
         // записи, но и не повод рвать прогрев для следующей диктовки.
         scheduleMicRelease()
@@ -1645,6 +1674,7 @@ public final class DictationController: ObservableObject {
     /// Сессию отменили хоткеем на загрузке модели (Whisper или VAD): записи не было,
     /// поэтому тихо возвращаемся в простой — без сообщения об ошибке.
     private func cancelSession() {
+        restoreMediaIfNeeded()
         let flashes = pendingCancelFlashes
         pendingCancel = false
         pendingCancelFlashes = false
