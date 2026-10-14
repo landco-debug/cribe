@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cribe использует микрофон для записи вашей речи и её распознавания на этом компьютере.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Cribe может временно приостанавливать Music и Spotify во время диктовки и возобновлять их после записи.</string>
 	<!-- Fork build: upstream Sparkle updates are intentionally disabled.
 	     Keeping the original feed would allow an official Cribe update to replace this fork. -->
 	<key>SUEnableAutomaticChecks</key>

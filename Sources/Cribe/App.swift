@@ -110,6 +110,9 @@ final class AppCore: ObservableObject {
             settings: settings
         )
         self.controller = controller
+        // UI-owned media control stays out of CribeCore and its CLI/test paths.
+        controller.onCaptureWillStart = { await MediaQuietDuringDictation.shared.begin() }
+        controller.onCaptureDidEnd = { MediaQuietDuringDictation.shared.end() }
         menu = MenuState(controller: controller, settings: settings)
         let seenOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
         needsOnboarding = !seenOnboarding
@@ -399,6 +402,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Возврат в приложение — обычный момент после выдачи Accessibility в System Settings.
     func applicationDidBecomeActive(_ notification: Notification) {
         MainActor.assumeIsolated { AppCore.shared.retryHotkeyTapIfNeeded() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { MediaQuietDuringDictation.shared.end() }
     }
 }
 
