@@ -36,7 +36,6 @@ final class MediaQuietDuringDictation {
     func begin() async {
         guard active == nil else { return }
         let candidates = Self.runningPlayers()
-        let output = OutputQuietSnapshot.quiet()
         let paused: [Player] = await withCheckedContinuation { continuation in
             commands.async {
                 let players = candidates.compactMap { candidate -> Player? in
@@ -46,6 +45,7 @@ final class MediaQuietDuringDictation {
                 continuation.resume(returning: players)
             }
         }
+        let output = OutputQuietSnapshot.quiet()
         active = Snapshot(output: output, players: paused)
         logger.info("Скрыт вывод на время диктовки; приостановлено плееров: \(paused.count)")
     }
@@ -133,7 +133,14 @@ final class MediaQuietDuringDictation {
         process.standardError = Pipe()
         do {
             try process.run()
+            // Automation permission sheets and broken players can otherwise hang osascript
+            // indefinitely, preventing a new microphone capture. Keep this bounded.
+            let watchdog = DispatchWorkItem {
+                if process.isRunning { process.terminate() }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(5), execute: watchdog)
             process.waitUntilExit()
+            watchdog.cancel()
             guard process.terminationStatus == 0 else { return nil }
             let response = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
