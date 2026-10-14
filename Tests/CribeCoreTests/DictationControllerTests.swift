@@ -618,6 +618,73 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertNil(controller.activeSessionLanguage)
     }
 
+    /// A recording owns one media pause/restore lease, even when Esc cancels it.
+    /// Models loading, duplicate hotkeys and release after Esc must not touch media.
+    func testMediaQuietHooksBalanceAcrossCancelAndStop() async throws {
+        let settings = makeSettings()
+        settings.quietMediaDuringRecording = true
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+        var pauses = 0
+        var restores = 0
+        controller.onCaptureWillStart = { pauses += 1 }
+        controller.onCaptureDidEnd = { restores += 1 }
+
+        controller.startDictation()
+        try await wait(for: "media pause during capture") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        XCTAssertEqual(pauses, 1)
+        XCTAssertEqual(restores, 0)
+
+        controller.cancelDictation()
+        controller.finishDictation() // no stray restore/start after Esc
+        XCTAssertEqual(restores, 1)
+        XCTAssertEqual(pauses, 1)
+
+        controller.startDictation()
+        try await wait(for: "second capture") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        XCTAssertEqual(pauses, 2)
+        controller.finishDictation()
+        XCTAssertEqual(restores, 2)
+        engine.release()
+    }
+
+    /// The media pauser can be waiting for an Apple Event when Esc is pressed.
+    /// The eventual return must restore media, without ever starting the mic.
+    func testMediaQuietIsRestoredWhenCancelledDuringPreCapturePause() async throws {
+        let settings = makeSettings()
+        settings.quietMediaDuringRecording = true
+        let controller = makeController(
+            engine: PromptSpyEngine(),
+            recorder: StubRecorder(),
+            settings: settings
+        )
+        var startedPause = false
+        var restores = 0
+        controller.onCaptureWillStart = {
+            startedPause = true
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        controller.onCaptureDidEnd = { restores += 1 }
+        controller.startDictation()
+        try await wait(for: "pre-capture media pause") { startedPause }
+        controller.cancelDictation()
+        try await wait(for: "cancelled media restore") { restores == 1 }
+        XCTAssertEqual(restores, 1)
+        if case .recording = controller.state {
+            XCTFail("Cancelled capture must never begin")
+        }
+    }
+
     /// Push-to-talk отпусканием заканчивает именно живую запись и отправляет её
     /// в тот же конвейер, что штатный второй tap.
     func testHoldStartAndReleaseProcessesRecording() async throws {
