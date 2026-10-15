@@ -58,6 +58,14 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(AppSettings(defaults: defaults).quietMediaDuringRecording)
     }
 
+    /// Low-RAM mode is opt-in: preserve historical fast first-dictation latency.
+    func testASRUnloadAfterRecognitionDefaultsOffAndPersists() {
+        let first = AppSettings(defaults: defaults)
+        XCTAssertFalse(first.unloadASRAfterRecognition)
+        first.unloadASRAfterRecognition = true
+        XCTAssertTrue(AppSettings(defaults: defaults).unloadASRAfterRecognition)
+    }
+
     /// Учёба на правках включена по умолчанию: без неё словарь пополняется только руками,
     /// а выключить её человек может и в онбординге, и в настройках.
     func testLearningFromEditsIsOnByDefault() {
