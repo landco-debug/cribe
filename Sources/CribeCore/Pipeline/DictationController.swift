@@ -154,6 +154,10 @@ actor EngineGate {
         inFlight = Task { _ = try? await task.value }
         return try await task.value
     }
+
+    /// A cancelled recording may have an in-flight live preview. Do not evict
+    /// a model until the engine gate has completed those native calls.
+    func waitForIdle() async { _ = await inFlight?.value }
 }
 
 
@@ -345,6 +349,36 @@ public final class DictationController: ObservableObject {
         guard mediaQuietingActive else { return }
         mediaQuietingActive = false
         onCaptureDidEnd?()
+    }
+
+    /// Only the macOS app provides this callback; CLI and tests remain unmodified.
+    /// The model registry keeps a cached engine object, which must also release its weights.
+    public var onReleaseIdleModel: (() -> Void)?
+    private var externalASRJobs = 0
+
+    /// The current dictation still appears in pending until GPT cleanup and text delivery
+    /// finish. At this safe point, ASR alone is already finished and can be unloaded.
+    private func unloadIfUnused(afterASR session: DictationSession? = nil) {
+        guard settings.unloadASRAfterRecognition, recording == nil, externalASRJobs == 0,
+              pending.allSatisfy({ $0 === session })
+        else { return }
+        session?.engine.unloadModel()
+        onReleaseIdleModel?()
+    }
+
+    /// Also called if the preference is enabled while Cribe is already idle.
+    public func unloadIdleModelNow() {
+        guard settings.unloadASRAfterRecognition, !isStarting, recording == nil,
+              pending.isEmpty, externalASRJobs == 0 else { return }
+        onReleaseIdleModel?()
+    }
+
+    private func unloadWhenGateIsIdle() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.gate.waitForIdle()
+            self.unloadIdleModelNow()
+        }
     }
 
     private let gate = EngineGate()
@@ -560,9 +594,12 @@ public final class DictationController: ObservableObject {
 
     /// Прогон файла для CLI: VAD-обрезка → Whisper → словарь → (опционально) GPT. Без вставки и истории.
     public func process(fileSamples: [Float], language: Language, useGPT: Bool) async throws -> String {
+        externalASRJobs += 1
         defer {
+            externalASRJobs -= 1
             processingState = nil
             publish()
+            unloadIdleModelNow()
         }
 
         let engine = engineProvider()
@@ -677,6 +714,7 @@ public final class DictationController: ObservableObject {
                 restoreMediaIfNeeded()
                 recording = nil
                 recordingState = nil
+                unloadWhenGateIsIdle()
                 publish()
                 fail(error.localizedDescription)
             }
@@ -1001,6 +1039,7 @@ public final class DictationController: ObservableObject {
         recorder.onFailure = nil
         _ = recorder.stop()
         restoreMediaIfNeeded()
+        unloadWhenGateIsIdle()
         scheduleMicRelease()
         publish()
         fail(reason)
@@ -1066,6 +1105,7 @@ public final class DictationController: ObservableObject {
         recorder.onFailure = nil
         _ = recorder.stop()
         restoreMediaIfNeeded()
+        unloadWhenGateIsIdle()
         // Микрофон отпускаем по обычному расписанию: отмена — не повод держать индикатор
         // записи, но и не повод рвать прогрев для следующей диктовки.
         scheduleMicRelease()
@@ -1092,6 +1132,9 @@ public final class DictationController: ObservableObject {
                 // необработанной — и для потолка, и для счётчика занятости, и для решения,
                 // достанется ли её итогу пилюля.
                 self.pending.removeFirst()
+                // Fallback for sessions whose ASR was followed by another queued
+                // or independently running recognition at the previous checkpoint.
+                self.unloadIdleModelNow()
                 // Очередь не опустела — следующая диктовка начинается прямо сейчас, и стадия
                 // обязана смениться в том же такте: пустой промежуток панель показала бы
                 // простоем и спрятала бы пилюлю между двумя диктовками.
@@ -1135,6 +1178,9 @@ public final class DictationController: ObservableObject {
                 language: language,
                 prompt: session.prompt
             )
+            // Last native ASR operation completed: release weights without waiting
+            // for GPT cleanup, provided there are no overlapping sessions/replays.
+            unloadIfUnused(afterASR: session)
             var text = ReplacementEngine.apply(raw, entries: entries)
             var degradations: [String] = []
             var translation: String?
@@ -1675,6 +1721,7 @@ public final class DictationController: ObservableObject {
     /// поэтому тихо возвращаемся в простой — без сообщения об ошибке.
     private func cancelSession() {
         restoreMediaIfNeeded()
+        unloadWhenGateIsIdle()
         let flashes = pendingCancelFlashes
         pendingCancel = false
         pendingCancelFlashes = false
@@ -1752,6 +1799,11 @@ public final class DictationController: ObservableObject {
     /// не пропал: в первый раз запись могла обрезаться воротами речи или уехать в ошибку,
     /// а здесь она отдаётся модели целиком, вместе с тишиной.
     public func retranscribe(item: HistoryItem) async throws -> String {
+        externalASRJobs += 1
+        defer {
+            externalASRJobs -= 1
+            unloadIdleModelNow()
+        }
         guard let audio = item.audio else { throw RecordingStoreError.missing }
         let samples = try recordings.samples(named: audio)
         let language = item.language
