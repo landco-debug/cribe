@@ -1178,6 +1178,10 @@ public final class DictationController: ObservableObject {
             let wantsTranslation = session.translatesToEnglish
             // Финальный PCM готовится по профилю выбранного engine. Для Whisper это
             // Handy-parity: без пиковой нормализации и с speech-only VAD.
+            // First drain any cancelled live preview. Even a VAD/no-speech error
+            // must not evict weights while its native inference is still running.
+            await session.finishingPreview?.value
+            session.finishingPreview = nil
             let vad = try await ensureVad()
             guard let speech = try await preparedSpeech(
                 samples,
@@ -1186,10 +1190,6 @@ public final class DictationController: ObservableObject {
             ) else {
                 throw DictationError.noSpeech
             }
-            // A preview already queued at stop must finish before final ASR and
-            // before we can safely free native GPU/ANE model handles.
-            await session.finishingPreview?.value
-            session.finishingPreview = nil
             let raw = try await gate.transcribe(
                 session.engine,
                 speech,
