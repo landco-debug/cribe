@@ -234,6 +234,8 @@ private final class DictationSession {
     // MARK: Снято на стопе — с этим диктовка едет в очередь
 
     var samples: [Float] = []
+    /// The final ASR pass awaits the canceled live preview before unloading weights.
+    var finishingPreview: Task<Void, Never>?
     /// Тумблер перевода читаем на стопе: меню меняет его и на живой записи, а после стопа
     /// решение принято — в очереди диктовку настройка догонять уже не вправе.
     var translatesToEnglish = false
@@ -355,12 +357,13 @@ public final class DictationController: ObservableObject {
     /// The model registry keeps a cached engine object, which must also release its weights.
     public var onReleaseIdleModel: (() -> Void)?
     private var externalASRJobs = 0
+    private var previewDrainCount = 0
 
     /// The current dictation still appears in pending until GPT cleanup and text delivery
     /// finish. At this safe point, ASR alone is already finished and can be unloaded.
     private func unloadIfUnused(afterASR session: DictationSession? = nil) {
         guard settings.unloadASRAfterRecognition, recording == nil, externalASRJobs == 0,
-              pending.allSatisfy({ $0 === session })
+              previewDrainCount == 0, pending.allSatisfy({ $0 === session })
         else { return }
         session?.engine.unloadModel()
         onReleaseIdleModel?()
@@ -369,14 +372,22 @@ public final class DictationController: ObservableObject {
     /// Also called if the preference is enabled while Cribe is already idle.
     public func unloadIdleModelNow() {
         guard settings.unloadASRAfterRecognition, !isStarting, recording == nil,
-              pending.isEmpty, externalASRJobs == 0 else { return }
+              pending.isEmpty, externalASRJobs == 0, previewDrainCount == 0 else { return }
         onReleaseIdleModel?()
     }
 
-    private func unloadWhenGateIsIdle() {
+    /// Settings changes also use the gate barrier, not a naked unload.
+    public func requestIdleModelEviction() {
+        unloadWhenGateIsIdle()
+    }
+
+    private func unloadWhenGateIsIdle(waitingFor preview: Task<Void, Never>? = nil) {
+        previewDrainCount += 1
         Task { [weak self] in
+            await preview?.value
             guard let self else { return }
             await self.gate.waitForIdle()
+            self.previewDrainCount -= 1
             self.unloadIdleModelNow()
         }
     }
@@ -1030,6 +1041,7 @@ public final class DictationController: ObservableObject {
         vadTask?.cancel()
         vadTask = nil
         cancelRecordingLimit()
+        let interruptedPreview = livePreviewTask
         livePreviewTask?.cancel()
         livePreviewTask = nil
         session.cancelled = true
@@ -1039,7 +1051,7 @@ public final class DictationController: ObservableObject {
         recorder.onFailure = nil
         _ = recorder.stop()
         restoreMediaIfNeeded()
-        unloadWhenGateIsIdle()
+        unloadWhenGateIsIdle(waitingFor: interruptedPreview)
         scheduleMicRelease()
         publish()
         fail(reason)
@@ -1054,6 +1066,7 @@ public final class DictationController: ObservableObject {
         vadTask?.cancel()
         vadTask = nil
         cancelRecordingLimit()
+        session.finishingPreview = livePreviewTask
         livePreviewTask?.cancel()
         livePreviewTask = nil
         // Отмена не прерывает идущий проход (он живёт своей задачей в `EngineGate`),
@@ -1092,6 +1105,7 @@ public final class DictationController: ObservableObject {
         vadTask?.cancel()
         vadTask = nil
         cancelRecordingLimit()
+        let interruptedPreview = livePreviewTask
         livePreviewTask?.cancel()
         livePreviewTask = nil
         // Идущий фоновый проход не прерывается: `EngineGate` отмену не смотрит, а WhisperKit
@@ -1105,7 +1119,7 @@ public final class DictationController: ObservableObject {
         recorder.onFailure = nil
         _ = recorder.stop()
         restoreMediaIfNeeded()
-        unloadWhenGateIsIdle()
+        unloadWhenGateIsIdle(waitingFor: interruptedPreview)
         // Микрофон отпускаем по обычному расписанию: отмена — не повод держать индикатор
         // записи, но и не повод рвать прогрев для следующей диктовки.
         scheduleMicRelease()
@@ -1172,6 +1186,10 @@ public final class DictationController: ObservableObject {
             ) else {
                 throw DictationError.noSpeech
             }
+            // A preview already queued at stop must finish before final ASR and
+            // before we can safely free native GPU/ANE model handles.
+            await session.finishingPreview?.value
+            session.finishingPreview = nil
             let raw = try await gate.transcribe(
                 session.engine,
                 speech,
