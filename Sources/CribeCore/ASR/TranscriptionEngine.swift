@@ -46,6 +46,11 @@ public protocol TranscriptionEngine: AnyObject {
     /// Скачивает (при необходимости) и загружает модель. Повторный вызов — no-op.
     func prepare(language: Language, onState: @escaping @Sendable (ASRModelState) -> Void) async throws
 
+    /// Освободить тяжёлую ASR-модель после последнего прохода.
+    /// Вызывать только в точке, где нет активной записи/другого ASR-прохода.
+    /// Сама установка и выбранный тип модели сохраняются на диске.
+    func unloadModel()
+
     /// Распознаёт моно-сэмплы 16 кГц. `prompt` — биасинг словарём, может быть пустым;
     /// движок вправе его игнорировать (у Parakeet входа для подсказки нет по устройству).
     func transcribe(_ samples: [Float], language: Language, prompt: String) async throws -> String
@@ -62,6 +67,9 @@ public protocol TranscriptionEngine: AnyObject {
 }
 
 public extension TranscriptionEngine {
+    /// Лёгкие тестовые/сторонние движки не обязаны поддерживать выгрузку.
+    func unloadModel() {}
+
     var audioInputProfile: ASRAudioInputProfile { .standard }
 
     /// Двойники в тестах перевод не изображают — им хватает обычного прохода.
