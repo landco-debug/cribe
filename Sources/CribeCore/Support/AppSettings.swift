@@ -59,6 +59,7 @@ public final class AppSettings: ObservableObject {
         static let autoStopEnabled = "autoStopEnabled"
         static let autoStopSilenceSeconds = "autoStopSilenceSeconds"
         static let recordingLimitEnabled = "recordingLimitEnabled"
+        static let unloadASRAfterRecognition = "unloadASRAfterRecognition"
         static let recordingLimitSeconds = "recordingLimitSeconds"
         static let dictationHotkeyMode = "dictationHotkeyMode"
         static let dictationKeyBehavior = "dictationKeyBehavior"
@@ -140,6 +141,12 @@ public final class AppSettings: ObservableObject {
     /// старта очередной записи, поэтому правка в настройках не меняет уже идущую сессию.
     @Published public var autoStopSilenceSeconds: Double {
         didSet { defaults.set(autoStopSilenceSeconds, forKey: Key.autoStopSilenceSeconds) }
+    }
+
+    /// Выгружать тяжёлые веса после последнего ASR-прохода, не дожидаясь облачной
+    /// чистки текста. По умолчанию выключено: цена экономии — холодный старт диктовки.
+    @Published public var unloadASRAfterRecognition: Bool {
+        didSet { defaults.set(unloadASRAfterRecognition, forKey: Key.unloadASRAfterRecognition) }
     }
 
     /// Независимая страховка от забытой включённой записи. Выключена по умолчанию, чтобы
@@ -259,6 +266,7 @@ public final class AppSettings: ObservableObject {
         autoStopEnabled = defaults.object(forKey: Key.autoStopEnabled) as? Bool ?? false
         autoStopSilenceSeconds = defaults.object(forKey: Key.autoStopSilenceSeconds) as? Double ?? 2.0
         recordingLimitEnabled = defaults.object(forKey: Key.recordingLimitEnabled) as? Bool ?? false
+        unloadASRAfterRecognition = defaults.object(forKey: Key.unloadASRAfterRecognition) as? Bool ?? false
         recordingLimitSeconds = defaults.object(forKey: Key.recordingLimitSeconds) as? Double ?? 60.0
         // Дефолт `true`, и он же достаётся тем, кто обновился: прежняя галочка про украинские
         // вставки тоже стояла по умолчанию, а вторая её половина раньше жила отдельно.

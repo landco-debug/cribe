@@ -92,6 +92,7 @@ final class AppCore: ObservableObject {
     private var leftOptionTap: ModifierKeyTap?
     private var escTap: KeyDownTap?
     private var hotkeyModeSubscription: AnyCancellable?
+    private var modelUnloadSubscription: AnyCancellable?
     private var hotkeyBehaviorSubscription: AnyCancellable?
     private var escTapSubscription: AnyCancellable?
     /// Об отсутствии разрешения пишем один раз на серию попыток, а не на каждую активацию.
@@ -110,6 +111,7 @@ final class AppCore: ObservableObject {
             settings: settings
         )
         self.controller = controller
+        controller.onReleaseIdleModel = { [models] in models.unloadCachedEngine() }
         // UI-owned media control stays out of CribeCore and its CLI/test paths.
         controller.onCaptureWillStart = { await MediaQuietDuringDictation.shared.begin() }
         controller.onCaptureDidEnd = { MediaQuietDuringDictation.shared.end() }
@@ -132,11 +134,14 @@ final class AppCore: ObservableObject {
     /// полгигабайта без спроса нельзя, об этом спрашивает отдельный экран. Ошибку тоже
     /// глотаем: это прогрев, а не работа, и настоящая диктовка сообщит о беде сама.
     private func warmUpModel() {
-        guard models.activeModelIsInstalled else { return }
+        // In low-memory mode the model must stay cold until an actual dictation.
+        guard !settings.unloadASRAfterRecognition, models.activeModelIsInstalled else { return }
         let engine = models.activeEngine()
         let language = settings.language
-        Task(priority: .utility) {
+        Task(priority: .utility) { [weak self] in
             try? await engine.prepare(language: language) { _ in }
+            // The user may have enabled unloading while this async warmup ran.
+            self?.controller.requestIdleModelEviction()
         }
     }
 
@@ -146,6 +151,14 @@ final class AppCore: ObservableObject {
         // В форке обновления из официального канала намеренно отключены:
         // иначе Sparkle мог бы заменить эту сборку оригинальным Cribe без наших изменений.
         warmUpModel()
+        modelUnloadSubscription = settings.$unloadASRAfterRecognition
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                MainActor.assumeIsolated {
+                    if enabled { self?.controller.requestIdleModelEviction() }
+                }
+            }
         panel = LivePanel(controller: controller, settings: settings)
         // Записка рядом с панелью: пилюля показывает одно дело, а с наложением их бывает
         // два сразу. Всё, что в неё не влезло, ядро отдаёт сюда поводом, а слова к поводу

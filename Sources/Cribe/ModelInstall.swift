@@ -241,6 +241,12 @@ final class ModelInstall: ObservableObject {
         return engine
     }
 
+    /// Keep the selected engine wrapper/ID, but discard its heavyweight native weights.
+    /// The next dictate hotkey calls prepare() and reloads from the already installed file.
+    func unloadCachedEngine() {
+        cachedEngine?.unloadModel()
+    }
+
     func activate(_ id: String) throws {
         guard entries.contains(where: { $0.id == id }) else { throw LibraryError.unknownModel }
         guard state(for: id) == .ready else { throw LibraryError.modelNotReady }

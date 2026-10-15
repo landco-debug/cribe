@@ -122,6 +122,10 @@ private final class HoldingEngine: TranscriptionEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
     private var calls = 0
+    private var unloadCalls = 0
+    var unloadCount: Int { lock.withLock { unloadCalls } }
+    var transcribeCount: Int { lock.withLock { calls } }
+    func unloadModel() { lock.withLock { unloadCalls += 1 } }
 
     /// Распознавание началось и ждёт `release()`.
     var isTranscribing: Bool { lock.withLock { calls > 0 } }
@@ -683,6 +687,94 @@ final class DictationControllerTests: XCTestCase {
         if case .recording = controller.state {
             XCTFail("Cancelled capture must never begin")
         }
+    }
+
+    /// A post-ASR unload must never happen on the microphone stop: transcription
+    /// still needs that model and can be waiting inside EngineGate.
+    func testModelUnloadWaitsForLastRecognition() async throws {
+        let settings = makeSettings()
+        settings.unloadASRAfterRecognition = true
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+
+        controller.startDictation()
+        try await wait(for: "capture for unload test") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        controller.finishDictation()
+        try await wait(for: "ASR begins") { engine.isTranscribing }
+        XCTAssertEqual(engine.unloadCount, 0, "Never unload on mic stop before ASR completes")
+
+        engine.release()
+        try await wait(for: "post-ASR model unload") { engine.unloadCount == 1 }
+        XCTAssertEqual(engine.unloadCount, 1)
+    }
+
+    /// Words-mode starts a real ASR pass while the microphone is open. Stopping
+    /// during that pass must wait for it before final ASR and native model release.
+    func testLivePreviewIsDrainedBeforeNativeModelUnload() async throws {
+        let settings = makeSettings()
+        settings.unloadASRAfterRecognition = true
+        settings.pillStyle = .words
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+        controller.startDictation()
+        try await wait(for: "live preview recording", timeout: 10) {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        try await wait(for: "live preview inference", timeout: 10) {
+            engine.isTranscribing
+        }
+        controller.finishDictation()
+        XCTAssertEqual(engine.unloadCount, 0)
+        engine.release()
+        try await wait(for: "native ASR unloaded after final pass", timeout: 10) {
+            engine.unloadCount == 1
+        }
+        XCTAssertGreaterThanOrEqual(engine.transcribeCount, 2)
+    }
+
+    /// A second recording keeps its own engine. Completing the first ASR may
+    /// not unload the weights until the second has also been recognized.
+    func testOverlappingRecordingKeepsSharedModelLoaded() async throws {
+        let settings = makeSettings()
+        settings.unloadASRAfterRecognition = true
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+
+        controller.startDictation()
+        try await wait(for: "first capture") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        controller.finishDictation()
+        try await wait(for: "first ASR running") { engine.isTranscribing }
+
+        controller.startDictation()
+        try await wait(for: "second capture") {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        engine.release()
+        try await wait(for: "first ASR completes") { controller.pendingCount == 0 }
+        XCTAssertEqual(engine.unloadCount, 0, "Next live recording still needs the model")
+
+        controller.finishDictation()
+        try await wait(for: "final model unload") { engine.unloadCount == 1 }
     }
 
     /// Push-to-talk отпусканием заканчивает именно живую запись и отправляет её
