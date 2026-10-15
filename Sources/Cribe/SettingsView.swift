@@ -254,6 +254,16 @@ private struct GeneralPane: View {
                     }
                 }
 
+                Toggle("Выгружать модель после распознавания", isOn: $settings.unloadASRAfterRecognition)
+                if settings.unloadASRAfterRecognition {
+                    caption(
+                        "После последнего прохода распознавания веса модели освобождаются, "
+                            + "не дожидаясь AI-чистки. При следующей записи модель вновь "
+                            + "загрузится с диска; первое слово говорите только после появления записи. "
+                            + "Старт может стать медленнее, особенно у Parakeet."
+                    )
+                }
+
                 if settings.language != .en {
                     Toggle("Мешаю русский и українську в одной диктовке", isOn: $settings.mixesUkrainian)
                 }
