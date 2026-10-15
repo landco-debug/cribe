@@ -124,6 +124,7 @@ private final class HoldingEngine: TranscriptionEngine, @unchecked Sendable {
     private var calls = 0
     private var unloadCalls = 0
     var unloadCount: Int { lock.withLock { unloadCalls } }
+    var transcribeCount: Int { lock.withLock { calls } }
     func unloadModel() { lock.withLock { unloadCalls += 1 } }
 
     /// Распознавание началось и ждёт `release()`.
@@ -712,6 +713,35 @@ final class DictationControllerTests: XCTestCase {
         engine.release()
         try await wait(for: "post-ASR model unload") { engine.unloadCount == 1 }
         XCTAssertEqual(engine.unloadCount, 1)
+    }
+
+    /// Words-mode starts a real ASR pass while the microphone is open. Stopping
+    /// during that pass must wait for it before final ASR and native model release.
+    func testLivePreviewIsDrainedBeforeNativeModelUnload() async throws {
+        let settings = makeSettings()
+        settings.unloadASRAfterRecognition = true
+        settings.pillStyle = .words
+        let engine = HoldingEngine()
+        let controller = makeController(
+            engine: engine,
+            recorder: recordedThreeSeconds(),
+            settings: settings
+        )
+        controller.startDictation()
+        try await wait(for: "live preview recording", timeout: 10) {
+            if case .recording = controller.state { return true }
+            return false
+        }
+        try await wait(for: "live preview inference", timeout: 10) {
+            engine.isTranscribing
+        }
+        controller.finishDictation()
+        XCTAssertEqual(engine.unloadCount, 0)
+        engine.release()
+        try await wait(for: "native ASR unloaded after final pass", timeout: 10) {
+            engine.unloadCount == 1
+        }
+        XCTAssertGreaterThanOrEqual(engine.transcribeCount, 2)
     }
 
     /// A second recording keeps its own engine. Completing the first ASR may
