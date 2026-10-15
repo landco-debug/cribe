@@ -1,4 +1,4 @@
-name: Build Cribe — MediaQuiet-AutoPause-WhisperParity
+name: Build Cribe — ASR-LowRAM-AutoUnload-MediaQuiet-WhisperParity
 
 on:
   workflow_dispatch:
