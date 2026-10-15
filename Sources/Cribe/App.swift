@@ -141,7 +141,7 @@ final class AppCore: ObservableObject {
         Task(priority: .utility) { [weak self] in
             try? await engine.prepare(language: language) { _ in }
             // The user may have enabled unloading while this async warmup ran.
-            self?.controller.unloadIdleModelNow()
+            self?.controller.requestIdleModelEviction()
         }
     }
 
@@ -156,7 +156,7 @@ final class AppCore: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] enabled in
                 MainActor.assumeIsolated {
-                    if enabled { self?.controller.unloadIdleModelNow() }
+                    if enabled { self?.controller.requestIdleModelEviction() }
                 }
             }
         panel = LivePanel(controller: controller, settings: settings)
