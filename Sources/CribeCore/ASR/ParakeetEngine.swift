@@ -92,11 +92,14 @@ public final class ParakeetEngine: TranscriptionEngine, @unchecked Sendable {
     /// Сбрасываем ОБЕ ссылки: иначе даже после nil у manager модель остаётся в RAM.
     /// Контроллер зовёт только после последнего ASR-прохода, не во время загрузки.
     public func unloadModel() {
-        queue.sync {
+        let unloaded: Bool = queue.sync {
+            // A startup warmup may still be loading: never break its shared Task.
+            guard manager != nil else { return false }
             manager = nil
             loading = nil
+            return true
         }
-        Self.logger.notice("Parakeet TDT v3 выгружена после распознавания")
+        if unloaded { Self.logger.notice("Parakeet TDT v3 выгружена после распознавания") }
     }
 
     public func transcribe(_ samples: [Float], language: Language, prompt: String) async throws -> String {
