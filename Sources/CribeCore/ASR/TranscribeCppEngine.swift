@@ -115,6 +115,20 @@ public final class TranscribeCppEngine: TranscriptionEngine, @unchecked Sendable
         }
     }
 
+    /// Сброс последней сильной ссылки на нативный Model вызывает
+    /// transcribe_model_free через его deinit. Ни GGUF-файлы, ни registry не затрагиваем.
+    /// Важно: освобождение возможно только после окончания session.run (контроллер).
+    public func unloadModel() {
+        let hadModel: Bool = locked {
+            guard model != nil, loading == nil else { return false }
+            model = nil
+            return true
+        }
+        if hadModel {
+            Self.logger.notice("transcribe.cpp выгрузил ASR-модель: \(self.modelURL.lastPathComponent, privacy: .public)")
+        }
+    }
+
     public func transcribe(
         _ samples: [Float],
         language: Language,
